@@ -47,25 +47,29 @@ async function main() {
   });
   const mirror = createMirrorClient({ baseUrl: cfg.MIRROR_NODE_URL });
 
-  let topicId = cfg.SENTINEL_TOPIC_ID;
+  let topicId = cfg.AEGIS_TOPIC_ID;
   if (!topicId) {
-    log('No SENTINEL_TOPIC_ID set — creating a new topic', '');
-    topicId = await createSentinelTopic(client, { memo: 'sentinel.v1' });
+    log('No AEGIS_TOPIC_ID set — creating a new topic', '');
+    topicId = await createSentinelTopic(client, { memo: 'aegis.v1' });
     log('Created topic', topicId);
-    console.log(`\n→ Paste this into your .env:    SENTINEL_TOPIC_ID=${topicId}\n`);
+    console.log(`\n→ Paste this into your .env:    AEGIS_TOPIC_ID=${topicId}\n`);
   } else {
     log('Reusing existing topic', topicId);
   }
 
-  const seller = cfg.SELLER_ACCOUNT_ID ?? cfg.BUYER_ACCOUNT_ID;
+  const underwriter = cfg.UNDERWRITER_ACCOUNT_ID ?? cfg.BUYER_ACCOUNT_ID;
+  // Placeholder envelope shape — replaced when the Aegis envelope schema lands
+  // in commit A1 (POLICY / PRICE_REF / SETTLEMENT / PROVIDER_CAPACITY). Until
+  // then this script exercises the same HCS round-trip the existing envelope
+  // module supports.
   /** @type {import('../src/hedera/envelope.js').EnvelopeT} */
   const sample = {
     v: 1,
     type: 'QUOTE',
     ts: new Date().toISOString(),
     buyer: cfg.BUYER_ACCOUNT_ID,
-    seller,
-    service: 'funding-round-lookup',
+    seller: underwriter,
+    service: 'aegis-pivot-smoke',
     amountHbar: 0.5,
     requestId: `smoke-${Date.now()}`,
     quoteExpiresAt: new Date(Date.now() + 60_000).toISOString(),

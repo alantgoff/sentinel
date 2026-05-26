@@ -1,31 +1,21 @@
-import { Client, PrivateKey, AccountId } from '@hashgraph/sdk';
 import { loadConfig } from './config.js';
 import { buildClient } from './hedera/client.js';
 import { createMirrorClient } from './hedera/mirror.js';
-import { createSentinelPlugin } from './plugin/index.js';
-import { createSeller } from './agents/seller.js';
-import { createBuyer } from './agents/buyer.js';
-import { buildChatModel } from './llm.js';
-import { createLlmBuyer } from './agents/llm-buyer.js';
 
 /**
- * Wire up the whole Sentinel system from .env. Constructs the buyer client,
- * the seller client (which may be the same account in single-account demo mode),
- * the mirror REST client, the Sentinel plugin, and the buyer/seller agents.
+ * Wire up Aegis. Constructs the buyer client (cap-purchasing agent), the
+ * underwriter client (Aegis pool that collects premiums and pays out), an
+ * optional provider client (mock supply-side hook), the mirror REST client,
+ * and the policy plugin once it's added in A2e.
  *
- * Returns refs that the server holds for the duration of its lifetime.
+ * Until the Aegis plugin / agents land in subsequent commits, this exports
+ * just the clients + mirror so the server boots and the smoke tests run.
  *
  * @param {object} [opts]
- * @param {(env: import('./hedera/envelope.js').EnvelopeT) => void} [opts.onSubmit]
- *        Fired whenever any party submits an envelope (for live UI updates).
+ * @param {(env: any) => void} [opts.onSubmit]   live UI broadcast hook
  */
-export function bootstrapSentinel(opts = {}) {
+export function bootstrapAegis(opts = {}) {
   const cfg = loadConfig();
-  if (!cfg.SENTINEL_TOPIC_ID) {
-    throw new Error(
-      'SENTINEL_TOPIC_ID is not set. Run `npm run smoke:hcs` first; it will create a topic and print the id to paste into .env.',
-    );
-  }
 
   const buyerClient = buildClient({
     network: cfg.HEDERA_NETWORK,
@@ -33,89 +23,54 @@ export function bootstrapSentinel(opts = {}) {
     privateKey: cfg.BUYER_PRIVATE_KEY,
   });
 
-  const haveDedicatedSeller =
-    cfg.SELLER_ACCOUNT_ID &&
-    cfg.SELLER_PRIVATE_KEY &&
-    cfg.SELLER_ACCOUNT_ID !== cfg.BUYER_ACCOUNT_ID;
+  const haveDedicatedUnderwriter =
+    cfg.UNDERWRITER_ACCOUNT_ID &&
+    cfg.UNDERWRITER_PRIVATE_KEY &&
+    cfg.UNDERWRITER_ACCOUNT_ID !== cfg.BUYER_ACCOUNT_ID;
 
-  const sellerClient = haveDedicatedSeller
+  const underwriterClient = haveDedicatedUnderwriter
     ? buildClient({
         network: cfg.HEDERA_NETWORK,
-        accountId: /** @type {string} */ (cfg.SELLER_ACCOUNT_ID),
-        privateKey: /** @type {string} */ (cfg.SELLER_PRIVATE_KEY),
+        accountId: /** @type {string} */ (cfg.UNDERWRITER_ACCOUNT_ID),
+        privateKey: /** @type {string} */ (cfg.UNDERWRITER_PRIVATE_KEY),
+      })
+    : null;
+
+  const haveProvider =
+    cfg.PROVIDER_ACCOUNT_ID &&
+    cfg.PROVIDER_PRIVATE_KEY &&
+    cfg.PROVIDER_ACCOUNT_ID !== cfg.BUYER_ACCOUNT_ID &&
+    cfg.PROVIDER_ACCOUNT_ID !== cfg.UNDERWRITER_ACCOUNT_ID;
+
+  const providerClient = haveProvider
+    ? buildClient({
+        network: cfg.HEDERA_NETWORK,
+        accountId: /** @type {string} */ (cfg.PROVIDER_ACCOUNT_ID),
+        privateKey: /** @type {string} */ (cfg.PROVIDER_PRIVATE_KEY),
       })
     : null;
 
   const mirror = createMirrorClient({ baseUrl: cfg.MIRROR_NODE_URL });
 
-  /** @type {import('./plugin/types.js').PolicyConfig} */
-  const policy = {
-    autonomousCapHbar: cfg.DEFAULT_AUTONOMOUS_CAP_HBAR,
-    dailyLimitHbar: cfg.DEFAULT_DAILY_LIMIT_HBAR,
-    velocityWindowSeconds: cfg.DEFAULT_VELOCITY_WINDOW_SECONDS,
-    velocityMaxTxns: cfg.DEFAULT_VELOCITY_MAX_TXNS,
-    serviceAllowlist: ['funding-round-lookup'],
-  };
-
-  const plugin = createSentinelPlugin({
-    mirror,
-    topicId: cfg.SENTINEL_TOPIC_ID,
-    policy,
-    onSubmit: opts.onSubmit,
-  });
-
-  const sellerAccountId = cfg.SELLER_ACCOUNT_ID ?? cfg.BUYER_ACCOUNT_ID;
-  const seller = createSeller({
-    client: sellerClient ?? buyerClient,
-    mirror,
-    accountId: sellerAccountId,
-    topicId: cfg.SENTINEL_TOPIC_ID,
-    onSubmit: opts.onSubmit,
-  });
-
-  const buyer = createBuyer({
-    client: buyerClient,
-    mirror,
-    accountId: cfg.BUYER_ACCOUNT_ID,
-    topicId: cfg.SENTINEL_TOPIC_ID,
-    policy,
-    seller,
-    onSubmit: opts.onSubmit,
-  });
-
-  // The LLM-driven buyer is lazy: only constructed on first /api/agent call,
-  // so the server boots without an LLM key (the deterministic flow doesn't
-  // need one). buildChatModel throws a readable error if the key is missing.
-  let llmBuyer = null;
-  function getLlmBuyer() {
-    if (llmBuyer) return llmBuyer;
-    const chatModel = buildChatModel(cfg);
-    llmBuyer = createLlmBuyer({
-      chatModel,
-      buyer,
-      mirror,
-      topicId: cfg.SENTINEL_TOPIC_ID,
-    });
-    return llmBuyer;
-  }
+  const underwriterAccountId = cfg.UNDERWRITER_ACCOUNT_ID ?? cfg.BUYER_ACCOUNT_ID;
 
   function close() {
     buyerClient.close();
-    sellerClient?.close();
+    underwriterClient?.close();
+    providerClient?.close();
   }
 
   return {
     cfg,
-    policy,
     mirror,
-    plugin,
-    buyer,
-    seller,
     buyerClient,
-    sellerClient: sellerClient ?? buyerClient,
-    sellerAccountId,
-    sellerIsBuyer: !haveDedicatedSeller,
-    getLlmBuyer,
+    underwriterClient: underwriterClient ?? buyerClient,
+    providerClient,
+    buyerAccountId: cfg.BUYER_ACCOUNT_ID,
+    underwriterAccountId,
+    providerAccountId: cfg.PROVIDER_ACCOUNT_ID ?? null,
+    underwriterIsBuyer: !haveDedicatedUnderwriter,
+    onSubmit: opts.onSubmit,
     close,
   };
 }

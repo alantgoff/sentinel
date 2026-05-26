@@ -3,108 +3,46 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sentinel — agent credit underwriting on Hedera</title>
-<link rel="stylesheet" href="/style.css">
+<title>Aegis — cost-cap underwriter on Hedera</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0b0d12; color:#e6e8ee; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; line-height:1.55; padding:48px 22px; max-width:780px; margin:0 auto; }
+  a { color:#5cb8ff; }
+  h1 { letter-spacing:0.2px; margin-bottom:4px; }
+  .sub { color:#8b93a7; }
+  .card { background:#141821; border:1px solid #262d3d; border-radius:10px; padding:18px 22px; margin-top:22px; }
+  code { background:#1b2030; padding:1px 6px; border-radius:4px; font-family:ui-monospace,monospace; font-size:13px; }
+  pre { background:#0f141e; border:1px solid #262d3d; border-radius:8px; padding:12px; font-family:ui-monospace,monospace; font-size:12.5px; overflow-x:auto; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:rgba(245,158,11,0.18); color:#f59e0b; font-size:11.5px; font-weight:600; letter-spacing:0.4px; }
+</style>
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <span class="brand-mark">Sentinel</span>
-    <span class="brand-sub">agent credit underwriting on Hedera</span>
+  <span class="tag">UNDER CONSTRUCTION</span>
+  <h1>Aegis</h1>
+  <p class="sub">Autonomous underwriter on Hedera selling cost-cap options on H100 GPU-hour rentals. Cash settle now; in-kind compute is roadmap. Pricing via Monte Carlo over a mean-reverting jump-diffusion process calibrated to public GPU-rental history; payouts gated by <code>AgentMode.RETURN_BYTES</code> human approval.</p>
+
+  <div class="card">
+    <h2>Building toward the demo flow</h2>
+    <ol>
+      <li>Buyer requests a cap (strike, notional, window) → live Monte Carlo premium quote</li>
+      <li>Buyer pays premium in HBAR → <code>POLICY</code> envelope posted to HCS</li>
+      <li>Price feed runs (calibrated jump-diffusion); "inject shock" button is available</li>
+      <li>At expiry: underwriter computes payout, builds the unsigned tx, surfaces it for human approval</li>
+      <li>Human signs → payout settles → <code>SETTLEMENT</code> envelope posted → mirror-verified</li>
+    </ol>
+    <p>Plumbing (kit wiring, HCS submit/read, mirror-node verifier, server scaffold, CI, Render deploy, x402 surface) is carried over from the prior Sentinel build; pricing model, plugin, agents, and UI are being rewritten.</p>
   </div>
-  <nav class="topbar-meta" id="meta"></nav>
-</header>
 
-<main class="grid">
-  <!-- LEFT: build a request -->
-  <section class="card">
-    <h2>1. Buy data from the seller</h2>
-    <p class="hint">The seller agent vends a per-query funding-round lookup at <code id="price">…</code> HBAR per query. Build a query, send it. Sentinel's policy plugin decides whether the buyer pays autonomously, asks you for approval, or refuses.</p>
-    <form id="buy-form" class="stack">
-      <label>Company contains
-        <input type="text" name="company" placeholder="e.g. Anthropic">
-      </label>
-      <label>Sector
-        <select name="sector"><option value="">— any —</option></select>
-      </label>
-      <label>Min round size (USD millions)
-        <input type="number" name="minAmountUsdM" min="0" step="10" placeholder="e.g. 100">
-      </label>
-      <label>Since date (YYYY-MM-DD)
-        <input type="text" name="sinceDate" placeholder="2024-01-01" pattern="^\d{4}-\d{2}-\d{2}$">
-      </label>
-      <label>Limit
-        <input type="number" name="limit" min="1" max="50" value="10">
-      </label>
-      <button type="submit" id="buy-btn">Request quote &amp; settle</button>
-    </form>
-  </section>
-
-  <!-- RIGHT: policy decision -->
-  <section class="card" id="decision-card" hidden>
-    <h2>2. Policy decision</h2>
-    <div id="decision"></div>
-    <details class="reasons" id="reasons-wrap" hidden><summary>Reputation breakdown</summary><pre id="reputation-reasons"></pre></details>
-    <div id="escalation" hidden>
-      <h3>Awaiting human approval</h3>
-      <p class="hint">The Sentinel plugin returned <strong>ESCALATE</strong>. The buyer agent built the transfer in <code>RETURN_BYTES</code> mode — it never signs above-cap spend autonomously. Approve to settle, or reject.</p>
-      <div class="actions">
-        <button id="approve-btn">Approve &amp; sign</button>
-        <button id="reject-btn" class="ghost">Reject</button>
-      </div>
-      <details><summary>Unsigned transaction bytes</summary><pre id="unsigned-bytes"></pre></details>
-    </div>
-    <div id="result" hidden>
-      <h3>Service response</h3>
-      <pre id="result-data"></pre>
-      <p class="hint">Settled tx: <a id="result-tx" target="_blank" rel="noreferrer noopener"></a></p>
-    </div>
-  </section>
-</main>
-
-<section class="card">
-  <h2>2½. Ask in plain English (LLM buyer)</h2>
-  <p class="hint">A LangGraph ReAct agent with the Sentinel + kit tools at its disposal. It picks a query, optionally consults reputation, calls <code>buy_funding_round_data</code>, and summarizes. Above-cap spend still escalates to the section above.</p>
-  <form id="agent-form" class="stack">
-    <label>Ask anything
-      <input type="text" id="agent-input" placeholder="e.g. Which AI hardware startups raised over $500M in 2024?">
-    </label>
-    <button type="submit" id="agent-btn">Send</button>
-  </form>
-  <div id="agent-result" hidden>
-    <h3>Answer</h3>
-    <div id="agent-answer" class="answer"></div>
-    <details><summary>Tool trace</summary><pre id="agent-trace"></pre></details>
+  <div class="card">
+    <h2>Submission for the Hedera AI Agent Bounty — Week 5: Policy Agent</h2>
+    <ul>
+      <li>Deadline: <strong>2026-06-21 23:59 UTC</strong></li>
+      <li>Network: <strong>testnet only</strong> (mainnet refused at the schema layer)</li>
+      <li>Repo: <a href="https://github.com/alantgoff/aegis">github.com/alantgoff/aegis</a></li>
+      <li>Trust boundary: <a href="/LIMITATIONS.md">LIMITATIONS.md</a></li>
+    </ul>
   </div>
-</section>
 
-<section class="card">
-  <h2>3. Seller's verified ledger</h2>
-  <p class="hint">Every envelope on the Sentinel HCS topic, plus an <em>independent</em> mirror-node re-check of every settlement's transaction id. Anything the mirror can't confirm is flagged. Reputation is computed only over the green rows.</p>
-  <div class="ledger-toolbar">
-    <label>Counterparty
-      <input type="text" id="ledger-counterparty" placeholder="0.0.xxxxxx — defaults to seller">
-    </label>
-    <fieldset class="scope-toggle">
-      <legend>View</legend>
-      <label class="inline"><input type="radio" name="rep-scope" value="buyer" checked> Buyer's POV</label>
-      <label class="inline"><input type="radio" name="rep-scope" value="global"> Network-wide</label>
-    </fieldset>
-    <button id="refresh-btn">Refresh</button>
-    <button id="forge-btn" class="danger" title="Demo: post 3 forged SETTLEMENT envelopes from the seller. The reputation engine will catch them.">Defection demo</button>
-    <span class="reputation-chip" id="rep-chip" hidden></span>
-  </div>
-  <table class="ledger">
-    <thead><tr><th>#</th><th>Time</th><th>Type</th><th>Buyer → Seller</th><th>Amount (HBAR)</th><th>Rule / TxId</th><th>Verified?</th></tr></thead>
-    <tbody id="ledger-body"></tbody>
-  </table>
-</section>
-
-<footer class="footer">
-  <span>Hedera AI Agent Bounty — Week 5: Policy Agent</span>
-  <span>Trust boundary: <a href="/LIMITATIONS.md">LIMITATIONS.md</a></span>
-</footer>
-
-<script src="/app.js" type="module"></script>
+  <p class="sub" style="margin-top:36px">Server health: <a href="/healthz"><code>/healthz</code></a> · Config introspection: <a href="/api/config"><code>/api/config</code></a></p>
 </body>
 </html>

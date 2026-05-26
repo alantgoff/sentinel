@@ -1,14 +1,14 @@
 # Render.com deployment config.
 #
-# Sentinel needs to stay live for 90 days past the bounty deadline (Bounty Terms §3.1).
+# Aegis needs to stay live for 90 days past the bounty deadline (Bounty Terms §3.1).
 # Free tier spins down after 15 min of inactivity — fine for the demo URL since the
 # grader's first visit will wake it; for a guaranteed-on instance use a paid plan.
 #
 # Required environment variables (set in the Render dashboard, NEVER in this file):
 #   BUYER_ACCOUNT_ID, BUYER_PRIVATE_KEY
-#   SELLER_ACCOUNT_ID, SELLER_PRIVATE_KEY
-#   GROQ_API_KEY  (or OPENAI_API_KEY + LLM_PROVIDER=openai)
-#   SENTINEL_TOPIC_ID  (from `npm run smoke:hcs`)
+#   UNDERWRITER_ACCOUNT_ID, UNDERWRITER_PRIVATE_KEY
+#   GROQ_API_KEY  (or OPENAI_API_KEY + LLM_PROVIDER=openai) — only for the NL-buyer agent
+#   AEGIS_TOPIC_ID  (from `npm run smoke:hcs`)
 #
 # Deploy:
 #   1. push this repo to GitHub
@@ -18,7 +18,7 @@
 
 services:
   - type: web
-    name: sentinel
+    name: aegis
     runtime: node
     plan: free
     region: oregon
@@ -37,26 +37,24 @@ services:
         value: groq
       - key: GROQ_MODEL
         value: llama-3.3-70b-versatile
-      - key: DEFAULT_AUTONOMOUS_CAP_HBAR
-        value: 2
-      - key: DEFAULT_DAILY_LIMIT_HBAR
-        value: 20
-      - key: DEFAULT_VELOCITY_WINDOW_SECONDS
-        value: 300
-      - key: DEFAULT_VELOCITY_MAX_TXNS
-        value: 5
+      - key: DEFAULT_R0_USD_HR
+        value: 2.50
+      - key: MAX_EXPOSURE_RATIO
+        value: 0.5
+      - key: PAYOUT_AUTONOMOUS_CAP_HBAR
+        value: 10
       # secrets — set these in the Render dashboard
       - key: BUYER_ACCOUNT_ID
         sync: false
       - key: BUYER_PRIVATE_KEY
         sync: false
-      - key: SELLER_ACCOUNT_ID
+      - key: UNDERWRITER_ACCOUNT_ID
         sync: false
-      - key: SELLER_PRIVATE_KEY
+      - key: UNDERWRITER_PRIVATE_KEY
         sync: false
       - key: GROQ_API_KEY
         sync: false
-      - key: SENTINEL_TOPIC_ID
+      - key: AEGIS_TOPIC_ID
         sync: false
       - key: PUBLIC_BASE_URL
         sync: false

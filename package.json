@@ -1,7 +1,7 @@
 {
-  "name": "sentinel",
-  "version": "0.1.0",
-  "description": "Underwriting rail for agent-to-agent payments on Hedera. Agents extend credit to each other based on a counterparty track record they can't fabricate.",
+  "name": "aegis",
+  "version": "0.2.0-pivot",
+  "description": "Aegis — autonomous underwriter agent on Hedera selling cost-cap options on H100 GPU-hour rentals. European-style cap, Monte Carlo priced, HBAR settled, mirror-node verified. Hedera AI Agent Bounty Week 5 (Policy Agent).",
   "type": "module",
   "main": "src/server/app.js",
   "scripts": {
@@ -10,16 +10,18 @@
     "smoke:balance": "node scripts/connectivity-smoke.js",
     "smoke:hcs": "node scripts/hcs-roundtrip.js",
     "verify:tx": "node scripts/verify-tx.js",
-    "x402:demo": "node scripts/x402-demo.js",
-    "mcp": "node src/mcp-server.js",
     "test": "node --test --test-reporter=spec test/"
   },
   "keywords": [
     "hedera",
     "hedera-agent-kit",
     "policy-agent",
-    "reputation",
-    "underwriting",
+    "compute-cost",
+    "gpu-hours",
+    "option-pricing",
+    "monte-carlo",
+    "jump-diffusion",
+    "underwriter",
     "hcs",
     "mirror-node",
     "x402",
