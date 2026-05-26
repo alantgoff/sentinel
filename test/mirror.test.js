@@ -79,6 +79,56 @@ test('matchesExpectedTransfer rejects wrong amount', async () => {
   assert.equal(m.ok, false);
 });
 
+test('matchesExpectedTransfer accepts buyer paying transfer + network fee', async () => {
+  // In real testnet runs the buyer is also the transaction payer, so their
+  // debit is -(transferAmount + fee). The seller credit is exact; the buyer
+  // debit is >= transferAmount.
+  const realPayload = {
+    transactions: [
+      {
+        consensus_timestamp: '1716736801.111111111',
+        transaction_id: TX_DASHED,
+        result: 'SUCCESS',
+        transfers: [
+          { account: '0.0.802', amount: 115_151, is_approval: false },       // node fee
+          { account: BUYER,     amount: -50_115_151, is_approval: false },   // -0.5 HBAR - fee
+          { account: SELLER,    amount: 50_000_000, is_approval: false },    // +0.5 HBAR
+        ],
+      },
+    ],
+  };
+  const fetchImpl = mockFetch({
+    [`/api/v1/transactions/${TX_DASHED}`]: { body: realPayload },
+  });
+  const mirror = createMirrorClient({ baseUrl: 'https://example', fetchImpl });
+  const v = await mirror.verifyTransaction(TX);
+  const m = matchesExpectedTransfer(v, { buyer: BUYER, seller: SELLER, amountHbar: 0.5 });
+  assert.deepEqual(m, { ok: true });
+});
+
+test('matchesExpectedTransfer rejects when buyer was credited not debited', async () => {
+  const reversed = {
+    transactions: [
+      {
+        consensus_timestamp: '1716736801.111111111',
+        transaction_id: TX_DASHED,
+        result: 'SUCCESS',
+        transfers: [
+          { account: BUYER,  amount: 50_000_000, is_approval: false },   // wrong: buyer received
+          { account: SELLER, amount: -50_115_151, is_approval: false },  // wrong: seller paid
+        ],
+      },
+    ],
+  };
+  const fetchImpl = mockFetch({
+    [`/api/v1/transactions/${TX_DASHED}`]: { body: reversed },
+  });
+  const mirror = createMirrorClient({ baseUrl: 'https://example', fetchImpl });
+  const v = await mirror.verifyTransaction(TX);
+  const m = matchesExpectedTransfer(v, { buyer: BUYER, seller: SELLER, amountHbar: 0.5 });
+  assert.equal(m.ok, false);
+});
+
 test('matchesExpectedTransfer rejects wrong counterparty', async () => {
   const fetchImpl = mockFetch({
     [`/api/v1/transactions/${TX_DASHED}`]: { body: successPayload },

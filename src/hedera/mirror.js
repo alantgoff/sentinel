@@ -164,11 +164,19 @@ export function createMirrorClient({ baseUrl, fetchImpl = globalThis.fetch, time
 }
 
 /**
- * Convenience: confirm an expected HBAR transfer of `amountHbar` from `buyer`
- * to `seller`. Returns { ok: true } iff the transaction succeeded AND
- * the transfer set contains the matching credit/debit (within 1 tinybar).
+ * Confirm an expected HBAR transfer of `amountHbar` to `seller`, paid by
+ * `buyer`. The seller-credit assertion is exact (within 1 tinybar); the
+ * buyer-debit assertion is "at least the transfer amount" because the buyer
+ * (as the transaction payer) ALSO pays the network fee, which shows up as
+ * an additional debit on the same row.
  *
- * Network fees show up as separate transfers — we ignore them.
+ * Example mirror transfers array for a real settled buy:
+ *   { account: '0.0.802',     amount:  +115_151    }   // network fee
+ *   { account: BUYER,         amount: -50_115_151  }   // -0.5 HBAR - fee
+ *   { account: SELLER,        amount: +50_000_000  }   // +0.5 HBAR
+ *
+ * The seller side is what matters for "did we get paid"; the buyer side is
+ * a sanity check that the right account funded it.
  *
  * @param {TxVerification} v
  * @param {object} expected
@@ -181,17 +189,22 @@ export function matchesExpectedTransfer(v, { buyer, seller, amountHbar }) {
   if (!v.verified) return { ok: false, reason: v.error ?? 'transaction not verified' };
   const tinybars = Math.round(amountHbar * 1e8);
   const TOLERANCE = 1;
+
   const sellerCredit = v.hbarTransfers.find(
     (t) => t.account === seller && Math.abs(t.amount - tinybars) <= TOLERANCE,
   );
   if (!sellerCredit) {
-    return { ok: false, reason: `seller ${seller} did not receive ${amountHbar} HBAR` };
+    return { ok: false, reason: `seller ${seller} did not receive ${amountHbar} HBAR (within 1 tinybar)` };
   }
+
+  // Buyer was charged at least the transfer amount. Allow extra for the
+  // network fee, but reject if the buyer's net debit is below `tinybars` —
+  // that means the funds didn't come from the claimed buyer.
   const buyerDebit = v.hbarTransfers.find(
-    (t) => t.account === buyer && Math.abs(t.amount + tinybars) <= TOLERANCE,
+    (t) => t.account === buyer && t.amount <= -(tinybars - TOLERANCE),
   );
   if (!buyerDebit) {
-    return { ok: false, reason: `buyer ${buyer} did not pay ${amountHbar} HBAR` };
+    return { ok: false, reason: `buyer ${buyer} did not fund ${amountHbar} HBAR` };
   }
   return { ok: true };
 }
