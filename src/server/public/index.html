@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sentinel — agent credit underwriting on Hedera</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">Sentinel</span>
+    <span class="brand-sub">agent credit underwriting on Hedera</span>
+  </div>
+  <nav class="topbar-meta" id="meta"></nav>
+</header>
+
+<main class="grid">
+  <!-- LEFT: build a request -->
+  <section class="card">
+    <h2>1. Buy data from the seller</h2>
+    <p class="hint">The seller agent vends a per-query funding-round lookup at <code id="price">…</code> HBAR per query. Build a query, send it. Sentinel's policy plugin decides whether the buyer pays autonomously, asks you for approval, or refuses.</p>
+    <form id="buy-form" class="stack">
+      <label>Company contains
+        <input type="text" name="company" placeholder="e.g. Anthropic">
+      </label>
+      <label>Sector
+        <select name="sector"><option value="">— any —</option></select>
+      </label>
+      <label>Min round size (USD millions)
+        <input type="number" name="minAmountUsdM" min="0" step="10" placeholder="e.g. 100">
+      </label>
+      <label>Since date (YYYY-MM-DD)
+        <input type="text" name="sinceDate" placeholder="2024-01-01" pattern="^\d{4}-\d{2}-\d{2}$">
+      </label>
+      <label>Limit
+        <input type="number" name="limit" min="1" max="50" value="10">
+      </label>
+      <button type="submit" id="buy-btn">Request quote &amp; settle</button>
+    </form>
+  </section>
+
+  <!-- RIGHT: policy decision -->
+  <section class="card" id="decision-card" hidden>
+    <h2>2. Policy decision</h2>
+    <div id="decision"></div>
+    <details class="reasons" id="reasons-wrap" hidden><summary>Reputation breakdown</summary><pre id="reputation-reasons"></pre></details>
+    <div id="escalation" hidden>
+      <h3>Awaiting human approval</h3>
+      <p class="hint">The Sentinel plugin returned <strong>ESCALATE</strong>. The buyer agent built the transfer in <code>RETURN_BYTES</code> mode — it never signs above-cap spend autonomously. Approve to settle, or reject.</p>
+      <div class="actions">
+        <button id="approve-btn">Approve &amp; sign</button>
+        <button id="reject-btn" class="ghost">Reject</button>
+      </div>
+      <details><summary>Unsigned transaction bytes</summary><pre id="unsigned-bytes"></pre></details>
+    </div>
+    <div id="result" hidden>
+      <h3>Service response</h3>
+      <pre id="result-data"></pre>
+      <p class="hint">Settled tx: <a id="result-tx" target="_blank" rel="noreferrer noopener"></a></p>
+    </div>
+  </section>
+</main>
+
+<section class="card">
+  <h2>3. Seller's verified ledger</h2>
+  <p class="hint">Every envelope on the Sentinel HCS topic, plus an <em>independent</em> mirror-node re-check of every settlement's transaction id. Anything the mirror can't confirm is flagged. Reputation is computed only over the green rows.</p>
+  <div class="ledger-toolbar">
+    <label>Counterparty
+      <input type="text" id="ledger-counterparty" placeholder="0.0.xxxxxx — defaults to seller">
+    </label>
+    <button id="refresh-btn">Refresh</button>
+    <span class="reputation-chip" id="rep-chip" hidden></span>
+  </div>
+  <table class="ledger">
+    <thead><tr><th>#</th><th>Time</th><th>Type</th><th>Buyer → Seller</th><th>Amount (HBAR)</th><th>Rule / TxId</th><th>Verified?</th></tr></thead>
+    <tbody id="ledger-body"></tbody>
+  </table>
+</section>
+
+<footer class="footer">
+  <span>Hedera AI Agent Bounty — Week 5: Policy Agent</span>
+  <span>Trust boundary: <a href="/LIMITATIONS.md">LIMITATIONS.md</a></span>
+</footer>
+
+<script src="/app.js" type="module"></script>
+</body>
+</html>
