@@ -1,0 +1,44 @@
+{
+  "name": "sentinel",
+  "version": "0.1.0",
+  "description": "Underwriting rail for agent-to-agent payments on Hedera. Agents extend credit to each other based on a counterparty track record they can't fabricate.",
+  "type": "module",
+  "main": "src/server/app.js",
+  "scripts": {
+    "start": "node src/server/app.js",
+    "dev": "node --watch src/server/app.js",
+    "smoke:balance": "node scripts/connectivity-smoke.js",
+    "smoke:hcs": "node scripts/hcs-roundtrip.js",
+    "verify:tx": "node scripts/verify-tx.js",
+    "test": "node --test --test-reporter=spec 'test/**/*.test.js'"
+  },
+  "keywords": [
+    "hedera",
+    "hedera-agent-kit",
+    "policy-agent",
+    "reputation",
+    "underwriting",
+    "hcs",
+    "mirror-node",
+    "x402",
+    "mcp"
+  ],
+  "author": "Alan Goff <alan.t.goff@icloud.com>",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@hashgraph/sdk": "^2.81.0",
+    "@langchain/core": "^1.1.48",
+    "@langchain/groq": "^1.2.1",
+    "@langchain/langgraph": "^1.3.2",
+    "@langchain/openai": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "hedera-agent-kit": "^3.8.2",
+    "langchain": "^1.4.2",
+    "zod": "^4.4.3"
+  }
+}
