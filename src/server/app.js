@@ -36,6 +36,12 @@ app.use(cors());
 app.use(express.json({ limit: '64kb' }));
 app.use(express.static(publicDir, { maxAge: '5m', extensions: ['html'] }));
 
+// Serve LIMITATIONS.md from the project root (referenced from the footer).
+const projectRoot = resolve(__dirname, '..', '..');
+app.get('/LIMITATIONS.md', (_req, res) => {
+  res.type('text/markdown').sendFile(resolve(projectRoot, 'LIMITATIONS.md'));
+});
+
 app.get('/api/config', (_req, res) => {
   res.json({
     network: sentinel.cfg.HEDERA_NETWORK,
