@@ -153,7 +153,7 @@ Anthropic SDK, etc.).
 
 ### One-time setup
 ```bash
-git clone <this repo>
+git clone https://github.com/alantgoff/sentinel.git
 cd sentinel
 npm install
 cp .env.example .env
