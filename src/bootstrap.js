@@ -5,6 +5,8 @@ import { createMirrorClient } from './hedera/mirror.js';
 import { createSentinelPlugin } from './plugin/index.js';
 import { createSeller } from './agents/seller.js';
 import { createBuyer } from './agents/buyer.js';
+import { buildChatModel } from './llm.js';
+import { createLlmBuyer } from './agents/llm-buyer.js';
 
 /**
  * Wire up the whole Sentinel system from .env. Constructs the buyer client,
@@ -81,6 +83,22 @@ export function bootstrapSentinel(opts = {}) {
     onSubmit: opts.onSubmit,
   });
 
+  // The LLM-driven buyer is lazy: only constructed on first /api/agent call,
+  // so the server boots without an LLM key (the deterministic flow doesn't
+  // need one). buildChatModel throws a readable error if the key is missing.
+  let llmBuyer = null;
+  function getLlmBuyer() {
+    if (llmBuyer) return llmBuyer;
+    const chatModel = buildChatModel(cfg);
+    llmBuyer = createLlmBuyer({
+      chatModel,
+      buyer,
+      mirror,
+      topicId: cfg.SENTINEL_TOPIC_ID,
+    });
+    return llmBuyer;
+  }
+
   function close() {
     buyerClient.close();
     sellerClient?.close();
@@ -97,6 +115,7 @@ export function bootstrapSentinel(opts = {}) {
     sellerClient: sellerClient ?? buyerClient,
     sellerAccountId,
     sellerIsBuyer: !haveDedicatedSeller,
+    getLlmBuyer,
     close,
   };
 }

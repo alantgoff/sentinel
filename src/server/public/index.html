@@ -63,6 +63,22 @@
 </main>
 
 <section class="card">
+  <h2>2½. Ask in plain English (LLM buyer)</h2>
+  <p class="hint">A LangGraph ReAct agent with the Sentinel + kit tools at its disposal. It picks a query, optionally consults reputation, calls <code>buy_funding_round_data</code>, and summarizes. Above-cap spend still escalates to the section above.</p>
+  <form id="agent-form" class="stack">
+    <label>Ask anything
+      <input type="text" id="agent-input" placeholder="e.g. Which AI hardware startups raised over $500M in 2024?">
+    </label>
+    <button type="submit" id="agent-btn">Send</button>
+  </form>
+  <div id="agent-result" hidden>
+    <h3>Answer</h3>
+    <div id="agent-answer" class="answer"></div>
+    <details><summary>Tool trace</summary><pre id="agent-trace"></pre></details>
+  </div>
+</section>
+
+<section class="card">
   <h2>3. Seller's verified ledger</h2>
   <p class="hint">Every envelope on the Sentinel HCS topic, plus an <em>independent</em> mirror-node re-check of every settlement's transaction id. Anything the mirror can't confirm is flagged. Reputation is computed only over the green rows.</p>
   <div class="ledger-toolbar">

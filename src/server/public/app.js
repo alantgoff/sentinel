@@ -286,6 +286,37 @@ function renderLedger(ledger) {
   }
 }
 
+async function submitAgent(ev) {
+  ev.preventDefault();
+  const input = /** @type {HTMLInputElement} */ ($('#agent-input'));
+  const message = input.value.trim();
+  if (!message) return;
+  const btn = /** @type {HTMLButtonElement} */ ($('#agent-btn'));
+  btn.disabled = true;
+  btn.textContent = 'Thinking…';
+  $('#agent-result').hidden = false;
+  $('#agent-answer').textContent = '(running…)';
+  $('#agent-trace').textContent = '';
+  try {
+    const res = await fetch('/api/agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+    const out = await res.json();
+    if (!res.ok) {
+      $('#agent-answer').textContent = `Error: ${out.error}${out.hint ? '\n\n' + out.hint : ''}`;
+      return;
+    }
+    $('#agent-answer').textContent = out.answer || '(no answer)';
+    $('#agent-trace').textContent = JSON.stringify(out.toolCalls, null, 2);
+    await refreshLedger();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send';
+  }
+}
+
 function bindEvents() {
   $('#buy-form').addEventListener('submit', submitBuy);
   $('#approve-btn').addEventListener('click', approve);
@@ -293,6 +324,7 @@ function bindEvents() {
   $('#refresh-btn').addEventListener('click', refreshLedger);
   $('#ledger-counterparty').addEventListener('change', refreshLedger);
   $('#forge-btn')?.addEventListener('click', forgeSettlements);
+  $('#agent-form')?.addEventListener('submit', submitAgent);
   for (const r of $$('input[name=rep-scope]')) r.addEventListener('change', refreshLedger);
 }
 

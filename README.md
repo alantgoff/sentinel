@@ -189,10 +189,15 @@ npm test                # 61 tests; mocked mirror + pure rule engine.
 
 ### MCP integration
 ```bash
-npm run mcp             # runs the stdio MCP server. Connect from Claude Desktop /
-                         # Anthropic SDK / any MCP client; the Sentinel tools appear
-                         # alongside the kit's built-in ones.
+npm run mcp             # stdio MCP server. Connect from Claude Desktop /
+                         # Anthropic SDK / Cursor / any MCP client.
 ```
+
+Step-by-step Claude Desktop setup (incl. the JSON config block) is in
+[`docs/MCP_SETUP.md`](./docs/MCP_SETUP.md). Once attached, Claude can call
+`sentinel_evaluate_payment`, `sentinel_get_counterparty_reputation`,
+`transfer_hbar_tool`, etc. directly — same trust boundary as the local agent
+(mainnet refused, above-cap spend forces RETURN_BYTES).
 
 ---
 

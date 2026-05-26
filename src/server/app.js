@@ -280,6 +280,44 @@ app.get('/seller/api/funding-rounds', async (req, res, next) => {
   }
 });
 
+/**
+ * Natural-language buyer endpoint. The user posts plain English; a LangGraph
+ * ReAct agent decides which tools to call (Sentinel reputation lookups +
+ * the gated buy tool). The buy tool still routes through the policy plugin,
+ * so ESCALATE / DENY remain enforced.
+ *
+ * Body: { message: string }
+ * Returns: { answer, toolCalls }
+ */
+app.post('/api/agent', async (req, res, next) => {
+  try {
+    const message = String(req.body?.message ?? '').trim();
+    if (!message) {
+      res.status(400).json({ error: 'message is required' });
+      return;
+    }
+    if (message.length > 2000) {
+      res.status(413).json({ error: 'message too long (max 2000 chars)' });
+      return;
+    }
+    let llmBuyer;
+    try {
+      llmBuyer = sentinel.getLlmBuyer();
+    } catch (err) {
+      res.status(503).json({
+        error: 'LLM not configured',
+        detail: err?.message ?? String(err),
+        hint: 'Set GROQ_API_KEY (or OPENAI_API_KEY + LLM_PROVIDER=openai) and restart the server.',
+      });
+      return;
+    }
+    const result = await llmBuyer.ask(message);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.get('/api/events', (req, res) => {
   res.set({
     'Content-Type': 'text/event-stream',
