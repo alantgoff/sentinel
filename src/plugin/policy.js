@@ -63,17 +63,31 @@ export function decidePolicy({ request, policy, reputation, recentSettlements, n
     dailyLimitHbar: limits.dailyLimitHbar,
   };
 
-  // Poor verifiability — counterparty has been claiming settlements we can't
-  // confirm. This is a stronger fraud signal than "they're new", so it runs
-  // before the thin-history gate.
-  if (reputation.totalSettlementClaims > 2 && reputation.claimToVerifiedRatio < 0.5) {
-    return {
-      decision: 'DENY',
-      ruleId: RULE_IDS.POOR_VERIFIABILITY,
-      reason: `only ${reputation.verifiedSettlementCount}/${reputation.totalSettlementClaims} of this counterparty's settlement claims verify on the mirror node`,
-      reputation,
-      effective: { autonomousCapHbar: limits.autonomousCapHbar, dailyLimitHbar: limits.dailyLimitHbar },
-    };
+  // Verifiability tiers — counterparty has claimed settlements we can't
+  // confirm on the mirror node. Two thresholds:
+  //   ratio <  0.5  → DENY  (majority of claims unverifiable; almost certainly fraud)
+  //   ratio <  0.75 → ESCALATE (a meaningful minority is forged; let a human decide)
+  // This runs before the thin-history gate so a counterparty that has been
+  // padding their history can't hide behind "well, I'm new."
+  if (reputation.totalSettlementClaims > 2) {
+    if (reputation.claimToVerifiedRatio < 0.5) {
+      return {
+        decision: 'DENY',
+        ruleId: RULE_IDS.POOR_VERIFIABILITY,
+        reason: `only ${reputation.verifiedSettlementCount}/${reputation.totalSettlementClaims} of this counterparty's settlement claims verify on the mirror node`,
+        reputation,
+        effective: { autonomousCapHbar: limits.autonomousCapHbar, dailyLimitHbar: limits.dailyLimitHbar },
+      };
+    }
+    if (reputation.claimToVerifiedRatio < 0.75) {
+      return {
+        decision: 'ESCALATE',
+        ruleId: RULE_IDS.POOR_VERIFIABILITY,
+        reason: `${reputation.totalSettlementClaims - reputation.verifiedSettlementCount} of ${reputation.totalSettlementClaims} claims fail mirror verification — escalating to a human`,
+        reputation,
+        effective: { autonomousCapHbar: limits.autonomousCapHbar, dailyLimitHbar: limits.dailyLimitHbar },
+      };
+    }
   }
 
   // Thin-history gate — new counterparties don't get autonomous spend; a human

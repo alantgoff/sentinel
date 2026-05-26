@@ -83,6 +83,66 @@ test('empty topic → score 0, no verified settlements', async () => {
   assert.equal(profile.totalSettlementClaims, 0);
 });
 
+test('distinctCounterpartyCount counts unique parties on the other side', async () => {
+  const txA = '0.0.1001@1716736800.111111111';
+  const txB = '0.0.1002@1716737000.222222222';
+  const txC = '0.0.1003@1716737200.333333333';
+  // Three different buyers all paid the same seller.
+  const messages = [
+    { sequence_number: 1, consensus_timestamp: '1.1', topic_id: TOPIC, message: b64({ ...settlementEnv(1, txA, 5), buyer: '0.0.1001' }) },
+    { sequence_number: 2, consensus_timestamp: '2.2', topic_id: TOPIC, message: b64({ ...settlementEnv(1, txB, 4), buyer: '0.0.1002' }) },
+    { sequence_number: 3, consensus_timestamp: '3.3', topic_id: TOPIC, message: b64({ ...settlementEnv(1, txC, 3), buyer: '0.0.1003' }) },
+  ];
+  const mirror = buildMockMirror({
+    topicMessages: messages,
+    verifiedTxIds: [txA, txB, txC],
+    amountByTxId: { [txA]: 1, [txB]: 1, [txC]: 1 },
+  });
+  // Workaround: buildMockMirror's settlementTransfers uses const BUYER. We
+  // mismatched the buyer accounts on purpose. The mirror mock will still
+  // match-or-fail based on whether matchesExpectedTransfer sees the right
+  // accounts. To get all three verified we need transfer entries for each.
+  // Quick replacement: monkey-patch verifyTransaction to be more lenient
+  // here — return SUCCESS with correct buyer per txId.
+  mirror.verifyTransaction = async (txId) => {
+    const normalized = txId.replace('@', '-').replace(/\.(\d+)$/, '-$1');
+    const buyerFor = { [txA]: '0.0.1001', [txB]: '0.0.1002', [txC]: '0.0.1003' }[txId];
+    const tinybars = 100_000_000; // 1 HBAR
+    return {
+      verified: true,
+      normalizedTxId: normalized,
+      result: 'SUCCESS',
+      consensusTimestamp: '1.1',
+      hbarTransfers: [
+        { account: '0.0.802', amount: 50_000, isApproval: false },
+        { account: buyerFor, amount: -(tinybars + 50_000), isApproval: false },
+        { account: SELLER, amount: tinybars, isApproval: false },
+      ],
+    };
+  };
+
+  // Global view (no viewer filter) — should see all three buyers.
+  const global = await buildReputationProfile({
+    mirror,
+    topicId: TOPIC,
+    counterparty: SELLER,
+  });
+  assert.equal(global.verifiedSettlementCount, 3);
+  assert.equal(global.distinctCounterpartyCount, 3);
+  assert.equal(global.viewer, null);
+
+  // Restricted to one buyer's POV — should see only that buyer's settlement.
+  const restricted = await buildReputationProfile({
+    mirror,
+    topicId: TOPIC,
+    counterparty: SELLER,
+    viewer: '0.0.1001',
+  });
+  assert.equal(restricted.verifiedSettlementCount, 1);
+  assert.equal(restricted.distinctCounterpartyCount, 1);
+  assert.equal(restricted.viewer, '0.0.1001');
+});
+
 test('three verified settlements lift the score', async () => {
   const txA = '0.0.1001@1716736800.111111111';
   const txB = '0.0.1001@1716737000.222222222';

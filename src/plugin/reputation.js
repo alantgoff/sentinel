@@ -86,6 +86,15 @@ export async function buildReputationProfile({ mirror, topicId, counterparty, vi
   const oldestVerifiedTs = verifiedRecords[0]?.ts ?? null;
   const newestVerifiedTs = verifiedRecords[verifiedRecords.length - 1]?.ts ?? null;
 
+  // Distinct counterparties on the OTHER side of each verified settlement.
+  // (When `counterparty` is acting as seller, this counts unique buyers.
+  //  When `counterparty` is acting as buyer, it counts unique sellers.)
+  const distinctCounterparties = new Set();
+  for (const r of verifiedRecords) {
+    distinctCounterparties.add(r.buyer === counterparty ? r.seller : r.buyer);
+  }
+  const distinctCounterpartyCount = distinctCounterparties.size;
+
   // Score: bounded 0..100. Built from four independent components, then capped.
   // Each component is deliberately conservative — a thin-but-clean history
   // shouldn't read as "deep clean history."
@@ -157,6 +166,8 @@ export async function buildReputationProfile({ mirror, topicId, counterparty, vi
     newestVerifiedTs,
     denialCount: denials.length,
     claimToVerifiedRatio,
+    distinctCounterpartyCount,
+    viewer: viewer ?? null, // null = network-wide view (no buyer-side filter)
     reasons,
   };
 }

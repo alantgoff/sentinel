@@ -51,7 +51,7 @@ test('thin history forces ESCALATE even at small amount', () => {
   assert.equal(d.ruleId, RULE_IDS.THIN_HISTORY);
 });
 
-test('poor verifiability forces DENY', () => {
+test('poor verifiability < 0.5 → DENY', () => {
   const d = decidePolicy({
     request: REQ,
     policy: BASE_POLICY,
@@ -64,6 +64,37 @@ test('poor verifiability forces DENY', () => {
   });
   assert.equal(d.decision, 'DENY');
   assert.equal(d.ruleId, RULE_IDS.POOR_VERIFIABILITY);
+});
+
+test('poor verifiability 0.5..0.75 → ESCALATE', () => {
+  // 4 verified / 7 total = 0.57 — the defection-demo state.
+  const d = decidePolicy({
+    request: REQ,
+    policy: BASE_POLICY,
+    reputation: rep({
+      verifiedSettlementCount: 4,
+      totalSettlementClaims: 7,
+      score: 33,
+    }),
+    now: NOW,
+  });
+  assert.equal(d.decision, 'ESCALATE');
+  assert.equal(d.ruleId, RULE_IDS.POOR_VERIFIABILITY);
+});
+
+test('poor verifiability >= 0.75 → falls through to other rules', () => {
+  // 3 verified / 4 total = 0.75 — within tolerance; the rule engine runs.
+  const d = decidePolicy({
+    request: REQ,
+    policy: BASE_POLICY,
+    reputation: rep({
+      verifiedSettlementCount: 3,
+      totalSettlementClaims: 4,
+      score: 60,
+    }),
+    now: NOW,
+  });
+  assert.equal(d.decision, 'ALLOW');
 });
 
 test('high-rep counterparty gets a raised autonomous cap', () => {

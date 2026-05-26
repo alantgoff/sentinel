@@ -10,10 +10,37 @@ const state = {
   lastOutcome: null,
 };
 
+function normalizeTxId(txId) {
+  return txId.replace('@', '-').replace(/\.(\d+)$/, '-$1');
+}
+
 function mirrorTxUrl(txId) {
   if (!state.config) return '#';
   const base = state.config.mirrorNodeUrl.replace(/\/+$/, '');
-  return `${base}/api/v1/transactions/${txId.replace('@', '-').replace(/\.(\d+)$/, '-$1')}`;
+  return `${base}/api/v1/transactions/${normalizeTxId(txId)}`;
+}
+
+// HashScan deep links — the canonical Hedera explorer.
+function hashScanBase() {
+  return `https://hashscan.io/${state.config?.network ?? 'testnet'}`;
+}
+function hashScanAccountUrl(accountId) {
+  return `${hashScanBase()}/account/${accountId}`;
+}
+function hashScanTxUrl(txId) {
+  return `${hashScanBase()}/transaction/${normalizeTxId(txId)}`;
+}
+function hashScanTopicUrl(topicId) {
+  return `${hashScanBase()}/topic/${topicId}`;
+}
+function accountLink(accountId) {
+  return `<a href="${hashScanAccountUrl(accountId)}" target="_blank" rel="noreferrer noopener" class="mono">${accountId}</a>`;
+}
+function txLink(txId) {
+  return `<a href="${hashScanTxUrl(txId)}" target="_blank" rel="noreferrer noopener" class="mono">${txId}</a>`;
+}
+function topicLink(topicId) {
+  return `<a href="${hashScanTopicUrl(topicId)}" target="_blank" rel="noreferrer noopener" class="mono">${topicId}</a>`;
 }
 
 function scoreClass(score) {
@@ -30,9 +57,9 @@ async function loadConfig() {
   const cfg = state.config;
   $('#meta').innerHTML = `
     <span>network <strong>${cfg.network}</strong></span>
-    <span>buyer <strong>${cfg.buyer}</strong></span>
-    <span>seller <strong>${cfg.seller}</strong></span>
-    <span>topic <strong>${cfg.topicId}</strong></span>
+    <span>buyer <strong>${accountLink(cfg.buyer)}</strong></span>
+    <span>seller <strong>${accountLink(cfg.seller)}</strong></span>
+    <span>topic <strong>${topicLink(cfg.topicId)}</strong></span>
   `;
   $('#price').textContent = String(cfg.service.priceHbarPerQuery);
 
@@ -79,10 +106,11 @@ function renderDecision(outcome) {
     <span>${d.ruleId}</span>
     <p class="hint" style="margin-top:6px">${d.reason}</p>
     <dl class="kv">
-      <dt>counterparty</dt><dd>${d.reputation.counterparty}</dd>
+      <dt>counterparty</dt><dd>${accountLink(d.reputation.counterparty)}</dd>
       <dt>score</dt><dd>${d.reputation.score} / 100</dd>
       <dt>verified settlements</dt><dd>${d.reputation.verifiedSettlementCount} / ${d.reputation.totalSettlementClaims}</dd>
       <dt>verified volume</dt><dd>${d.reputation.verifiedVolumeHbar.toFixed(2)} HBAR</dd>
+      <dt>distinct counterparties</dt><dd>${d.reputation.distinctCounterpartyCount ?? '—'}</dd>
       <dt>effective autonomous cap</dt><dd>${d.effective.autonomousCapHbar} HBAR</dd>
       <dt>effective daily limit</dt><dd>${d.effective.dailyLimitHbar} HBAR</dd>
     </dl>
@@ -103,7 +131,7 @@ function renderDecision(outcome) {
   if (outcome.kind === 'ALLOWED') {
     $('#result-data').textContent = JSON.stringify(outcome.data, null, 2);
     const a = /** @type {HTMLAnchorElement} */ ($('#result-tx'));
-    a.href = mirrorTxUrl(outcome.txId);
+    a.href = hashScanTxUrl(outcome.txId);
     a.textContent = outcome.txId;
   }
 }
@@ -172,9 +200,11 @@ async function reject() {
 
 async function refreshLedger() {
   const counterparty = /** @type {HTMLInputElement} */ ($('#ledger-counterparty')).value.trim() || state.config?.seller;
+  const scopeEl = /** @type {HTMLInputElement | null} */ (document.querySelector('input[name=rep-scope]:checked'));
+  const scope = scopeEl?.value === 'global' ? 'global' : 'buyer';
   const [ledgerRes, repRes] = await Promise.all([
     fetch(`/api/ledger?counterparty=${encodeURIComponent(counterparty)}`),
-    fetch(`/api/reputation?counterparty=${encodeURIComponent(counterparty)}`),
+    fetch(`/api/reputation?counterparty=${encodeURIComponent(counterparty)}&scope=${scope}`),
   ]);
   const ledger = await ledgerRes.json();
   const rep = await repRes.json();
@@ -185,12 +215,39 @@ async function refreshLedger() {
 function renderRepChip(rep) {
   const chip = $('#rep-chip');
   chip.hidden = false;
+  const scopeLabel = rep.viewer ? `viewed by ${rep.viewer.slice(0, 9)}…` : 'network-wide';
   chip.innerHTML = `
-    <span class="muted">${rep.counterparty}</span>
+    ${accountLink(rep.counterparty)}
     <span class="score ${scoreClass(rep.score)}">${rep.score}/100</span>
     <span>· ${rep.verifiedSettlementCount}/${rep.totalSettlementClaims} verified</span>
     <span>· ${rep.verifiedVolumeHbar.toFixed(2)} HBAR</span>
+    <span>· ${rep.distinctCounterpartyCount} counterparties</span>
+    <span class="scope-tag">${scopeLabel}</span>
   `;
+}
+
+async function forgeSettlements() {
+  if (!confirm('Defection demo: post 3 forged SETTLEMENT envelopes from the seller. The reputation engine will catch them (mirror node won\'t verify the tx ids) and the seller\'s score will crash. Proceed?')) return;
+  const btn = /** @type {HTMLButtonElement} */ ($('#forge-btn'));
+  btn.disabled = true;
+  btn.textContent = 'Forging…';
+  try {
+    const res = await fetch('/api/demo/forge-settlements', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ count: 3, amountHbar: 1.5 }),
+    });
+    const out = await res.json();
+    if (!res.ok) {
+      alert(`Forge failed: ${out.error}`);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1200)); // let mirror catch up
+    await refreshLedger();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Defection demo';
+  }
 }
 
 function renderLedger(ledger) {
@@ -205,7 +262,7 @@ function renderLedger(ledger) {
     if (verif && !verif.verified) tr.classList.add('unverified');
 
     const ruleOrTx =
-      env.type === 'SETTLEMENT' ? env.txId :
+      env.type === 'SETTLEMENT' ? txLink(env.txId) :
       env.type === 'POLICY_DECISION' || env.type === 'DENIAL' ? `${env.policy.ruleId} (${env.policy.result})` :
       env.type === 'QUOTE' ? `expires ${env.quoteExpiresAt ?? '—'}` :
       '';
@@ -214,15 +271,15 @@ function renderLedger(ledger) {
       env.type !== 'SETTLEMENT' ? '<span class="verif-pill skip">n/a</span>' :
       !verif ? '<span class="verif-pill skip">checking…</span>' :
       verif.verified ? '<span class="verif-pill ok">on mirror</span>' :
-      `<span class="verif-pill bad">${verif.result ?? 'unverified'}</span>`;
+      `<span class="verif-pill bad" title="${(verif.error ?? '').replace(/"/g, '&quot;')}">${verif.result ?? 'unverified'}</span>`;
 
     tr.innerHTML = `
       <td>${m.sequenceNumber}</td>
       <td class="mono">${env.ts}</td>
       <td class="type-cell">${env.type}</td>
-      <td class="mono">${env.buyer} → ${env.seller}</td>
+      <td>${accountLink(env.buyer)} → ${accountLink(env.seller)}</td>
       <td>${env.amountHbar}</td>
-      <td class="mono">${ruleOrTx}</td>
+      <td>${ruleOrTx}</td>
       <td>${verifCell}</td>
     `;
     tbody.appendChild(tr);
@@ -235,6 +292,8 @@ function bindEvents() {
   $('#reject-btn').addEventListener('click', reject);
   $('#refresh-btn').addEventListener('click', refreshLedger);
   $('#ledger-counterparty').addEventListener('change', refreshLedger);
+  $('#forge-btn')?.addEventListener('click', forgeSettlements);
+  for (const r of $$('input[name=rep-scope]')) r.addEventListener('change', refreshLedger);
 }
 
 function attachEventStream() {

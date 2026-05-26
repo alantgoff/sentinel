@@ -39,6 +39,8 @@
  * @property {string | null} newestVerifiedTs    ISO
  * @property {number} denialCount                DENIAL envelopes against this counterparty
  * @property {number} claimToVerifiedRatio       verified / totalClaims, 0..1
+ * @property {number} distinctCounterpartyCount  unique parties on the OTHER side of verified settlements
+ * @property {string | null} viewer              null when this profile is the network-wide view
  * @property {string[]} reasons                  human-readable breakdown of why we scored this way
  *
  * @typedef {object} RuleResult

@@ -5,7 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
 import { bootstrapSentinel } from '../bootstrap.js';
 import { buildReputationProfile } from '../plugin/reputation.js';
-import { readEnvelopes } from '../hedera/hcs.js';
+import { readEnvelopes, submitEnvelope } from '../hedera/hcs.js';
 import { describeService, QuerySchema } from '../agents/service.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -58,7 +58,13 @@ app.get('/api/config', (_req, res) => {
 app.get('/api/reputation', async (req, res, next) => {
   try {
     const counterparty = String(req.query.counterparty ?? sentinel.sellerAccountId);
-    const viewer = req.query.viewer ? String(req.query.viewer) : sentinel.buyer.accountId;
+    // ?scope=global → network-wide view (no viewer filter).
+    // ?scope=buyer  → restrict to envelopes where this buyer is also a party.
+    // Default: buyer-view (the policy plugin's normal lens).
+    const scope = String(req.query.scope ?? 'buyer');
+    const viewer = scope === 'global'
+      ? undefined
+      : req.query.viewer ? String(req.query.viewer) : sentinel.buyer.accountId;
     const profile = await buildReputationProfile({
       mirror: sentinel.mirror,
       topicId: sentinel.cfg.SENTINEL_TOPIC_ID,
@@ -152,6 +158,81 @@ app.post('/api/reject', (req, res) => {
     return;
   }
   res.json({ ok: true });
+});
+
+/**
+ * DEFECTION DEMO endpoint — simulate a misbehaving seller who posts forged
+ * SETTLEMENT envelopes to inflate their reputation. The envelope passes
+ * Sentinel's schema validation (it IS a valid envelope) but references a
+ * txId that never settled on-chain. The reputation engine re-checks against
+ * the mirror node and discards it, dragging down the claim-to-verified
+ * ratio — which trips DENY/poor-verifiability on subsequent buys.
+ *
+ * Body:
+ *   { count?: number = 3, amountHbar?: number = 1.5 }
+ *
+ * Posts `count` forged SETTLEMENT envelopes from the seller's POV (so the
+ * seller's reputation, viewed by any buyer, takes the hit).
+ *
+ * In a real attack the seller would do this off-protocol; we expose it here
+ * to make the trust-boundary writeup visceral in the demo.
+ */
+app.post('/api/demo/forge-settlements', async (req, res, next) => {
+  try {
+    const count = Math.min(20, Math.max(1, Number(req.body?.count ?? 3)));
+    const amountHbar = Math.min(10, Math.max(0.01, Number(req.body?.amountHbar ?? 1.5)));
+    const submitted = [];
+    for (let i = 0; i < count; i++) {
+      // Fabricate a valid-looking but unverifiable tx id. Hedera txIds are
+      // `account@seconds.nanos` — we use a random epoch in the recent past
+      // with a deterministic nano tail so the seller side LOOKS plausible
+      // but the mirror node will return 404 for it.
+      const seconds = Math.floor(Date.now() / 1000) - 60 - i * 7;
+      const nanos = 100_000_001 + i;
+      const forgedTxId = `${sentinel.sellerAccountId}@${seconds}.${nanos}`;
+      const env = {
+        v: /** @type {1} */ (1),
+        type: /** @type {'SETTLEMENT'} */ ('SETTLEMENT'),
+        ts: new Date().toISOString(),
+        // The seller is claiming a phantom buyer paid them — a Sybil
+        // counterparty. Use the buyer's account for narrative coherence
+        // (so "you paid the seller" is the claim being asserted).
+        buyer: sentinel.buyer.accountId,
+        seller: sentinel.sellerAccountId,
+        service: 'funding-round-lookup',
+        amountHbar,
+        txId: forgedTxId,
+        policy: {
+          ruleId: 'forged-by-defection-demo',
+          result: /** @type {'ALLOW'} */ ('ALLOW'),
+          reason: 'this is a demonstration of a misbehaving seller',
+        },
+        requestId: `forge-${Date.now()}-${i}`,
+      };
+      // Submit from the SELLER's client — in real life the seller controls
+      // their own HCS submissions. The reputation engine cannot tell who
+      // posted a message; what matters is whether the referenced tx verifies.
+      const { sequenceNumber } = await submitEnvelope(
+        sentinel.sellerClient,
+        sentinel.cfg.SENTINEL_TOPIC_ID,
+        env,
+      );
+      broadcastEnvelope(env);
+      submitted.push({ sequenceNumber, txId: forgedTxId, amountHbar });
+    }
+    res.json({
+      ok: true,
+      count: submitted.length,
+      submitted,
+      narrative:
+        'Seller posted forged SETTLEMENT envelopes. Their claim count just went up, but ' +
+        'the verified count will NOT — the mirror node has no record of these tx ids. ' +
+        'Re-check reputation and try another buy: the score will crash and any ' +
+        'reasonable-sized request will hit DENY/poor-verifiability.',
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**

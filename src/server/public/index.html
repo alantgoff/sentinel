@@ -69,7 +69,13 @@
     <label>Counterparty
       <input type="text" id="ledger-counterparty" placeholder="0.0.xxxxxx — defaults to seller">
     </label>
+    <fieldset class="scope-toggle">
+      <legend>View</legend>
+      <label class="inline"><input type="radio" name="rep-scope" value="buyer" checked> Buyer's POV</label>
+      <label class="inline"><input type="radio" name="rep-scope" value="global"> Network-wide</label>
+    </fieldset>
     <button id="refresh-btn">Refresh</button>
+    <button id="forge-btn" class="danger" title="Demo: post 3 forged SETTLEMENT envelopes from the seller. The reputation engine will catch them.">Defection demo</button>
     <span class="reputation-chip" id="rep-chip" hidden></span>
   </div>
   <table class="ledger">
