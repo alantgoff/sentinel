@@ -24,9 +24,17 @@ async function main() {
   const signer = {
     async payQuote(quote) {
       console.log(`   ↳ server returned 402, quote:`, quote);
-      const outcome = await sentinel.buyer.request({ query });
+      const outcome = await sentinel.buyer.payQuote({
+        quote: {
+          requestId: quote.requestId,
+          service: quote.service,
+          priceHbar: quote.priceHbar,
+          payTo: quote.payTo,
+          expiresAt: quote.expiresAt,
+        },
+      });
       if (outcome.kind !== 'ALLOWED') {
-        throw new Error(`buyer flow did not settle: ${outcome.kind} — ${outcome.decision.reason}`);
+        throw new Error(`policy did not settle the quote: ${outcome.kind} — ${outcome.decision.reason}`);
       }
       console.log(`   ↳ settled with txId ${outcome.txId}`);
       return outcome.txId;

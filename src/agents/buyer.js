@@ -1,6 +1,4 @@
 import { AgentMode, HederaLangchainToolkit } from 'hedera-agent-kit';
-import { Transaction } from '@hashgraph/sdk';
-import { randomUUID } from 'node:crypto';
 import { submitEnvelope } from '../hedera/hcs.js';
 import { evaluatePayment } from '../plugin/policy.js';
 
@@ -76,9 +74,21 @@ export function createBuyer({ client, mirror, accountId, topicId, policy, seller
   const autonomousApi = autonomousKit.getHederaAgentKitAPI();
   const returnBytesApi = returnBytesKit.getHederaAgentKitAPI();
 
+  // We deliberately bypass api.run() — it JSON-stringifies the result, which
+  // mangles the Uint8Array on the RETURN_BYTES path. The tool's own execute
+  // returns the structured { raw, humanMessage } | { bytes } shape directly.
+  function findTransferTool(api) {
+    const t = api.tools.find((tool) => tool.method === 'transfer_hbar_tool');
+    if (!t) throw new Error('transfer_hbar_tool not found on the toolkit');
+    return t;
+  }
+  const autonomousTransferTool = findTransferTool(autonomousApi);
+  const returnBytesTransferTool = findTransferTool(returnBytesApi);
+
   /**
-   * Execute the transfer via the kit. Returns either a tx id (AUTONOMOUS) or
-   * an unsigned bytes blob (RETURN_BYTES).
+   * Execute the transfer via the kit. Returns the kit's structured result —
+   * either { raw: { transactionId, status, ... }, humanMessage } in AUTONOMOUS
+   * mode, or { bytes: Uint8Array } in RETURN_BYTES mode.
    *
    * @param {'AUTONOMOUS'|'RETURN_BYTES'} mode
    * @param {string} sellerAccount
@@ -87,12 +97,12 @@ export function createBuyer({ client, mirror, accountId, topicId, policy, seller
    */
   async function transfer(mode, sellerAccount, amountHbar, requestId) {
     const api = mode === 'AUTONOMOUS' ? autonomousApi : returnBytesApi;
-    const out = await api.run('transfer_hbar_tool', {
+    const tool = mode === 'AUTONOMOUS' ? autonomousTransferTool : returnBytesTransferTool;
+    return tool.execute(api.client, api.context, {
       transfers: [{ accountId: sellerAccount, amount: amountHbar }],
       sourceAccountId: accountId,
       transactionMemo: `sentinel/${requestId}`,
     });
-    return out;
   }
 
   /**
@@ -127,13 +137,11 @@ export function createBuyer({ client, mirror, accountId, topicId, policy, seller
 
     if (decision.decision === 'ESCALATE') {
       const result = await transfer('RETURN_BYTES', seller.accountId, q.priceHbar, q.requestId);
-      // result.raw.bytes is a Uint8Array; serialize for transport
-      const raw = result?.raw ?? result;
       const bytes =
-        raw?.bytes instanceof Uint8Array
-          ? raw.bytes
-          : raw?.bytes
-            ? Uint8Array.from(raw.bytes)
+        result?.bytes instanceof Uint8Array
+          ? result.bytes
+          : result?.bytes
+            ? Uint8Array.from(result.bytes)
             : null;
       if (!bytes) {
         throw new Error('RETURN_BYTES path produced no bytes blob');
@@ -163,7 +171,6 @@ export function createBuyer({ client, mirror, accountId, topicId, policy, seller
   async function continueAfterApproval({ quote, decision }) {
     const q = seller.getQuote(quote.requestId);
     if (!q) {
-      // Quote expired between escalation and approval — fail loud.
       const denied = {
         ...decision,
         decision: /** @type {'DENY'} */ ('DENY'),
@@ -173,7 +180,17 @@ export function createBuyer({ client, mirror, accountId, topicId, policy, seller
       await postDenial(denied, quote);
       return { kind: 'DENIED', requestId: quote.requestId, decision: denied };
     }
-    return await settleAndServe(decision, q);
+    // After the human approves, the effective decision becomes ALLOW with a
+    // ruleId that records the override — so the SETTLEMENT envelope's policy
+    // snapshot is auditable as "escalated + human-approved" rather than the
+    // original ESCALATE.
+    const approved = {
+      ...decision,
+      decision: /** @type {'ALLOW'} */ ('ALLOW'),
+      ruleId: `${decision.ruleId}+human-approved`,
+      reason: `escalation resolved by human approval (original rule: ${decision.reason})`,
+    };
+    return await settleAndServe(approved, q);
   }
 
   /**
@@ -184,8 +201,11 @@ export function createBuyer({ client, mirror, accountId, topicId, policy, seller
    */
   async function settleAndServe(decision, q) {
     const transferOut = await transfer('AUTONOMOUS', seller.accountId, q.priceHbar, q.requestId);
-    const raw = transferOut?.raw ?? transferOut;
-    const txId = raw?.transactionId ?? raw?.txId;
+    const raw = transferOut?.raw;
+    if (raw?.status && raw.status !== 'SUCCESS') {
+      throw new Error(`transfer did not succeed: ${raw.status}`);
+    }
+    const txId = raw?.transactionId;
     if (!txId) {
       throw new Error('AUTONOMOUS transfer returned no transactionId');
     }
@@ -279,5 +299,110 @@ export function createBuyer({ client, mirror, accountId, topicId, policy, seller
     onSubmit?.(env);
   }
 
-  return { request, continueAfterApproval, accountId };
+  /**
+   * Settle a quote that was issued out-of-band (e.g. via an HTTP 402 challenge
+   * from a different client). The Sentinel policy plugin still runs — same
+   * decision matrix — but the quote is used as-is instead of being re-issued.
+   *
+   * @param {object} args
+   * @param {{ requestId: string, service: string, priceHbar: number, payTo: string, expiresAt: string }} args.quote
+   * @returns {Promise<BuyOutcome>}
+   */
+  async function payQuote({ quote }) {
+    const decision = await evaluatePayment({
+      mirror,
+      topicId,
+      request: {
+        buyer: accountId,
+        seller: quote.payTo,
+        service: quote.service,
+        amountHbar: quote.priceHbar,
+      },
+      policy,
+    });
+
+    // Make the decision auditable on-chain before transferring.
+    const auditEnv = {
+      v: /** @type {1} */ (1),
+      type: /** @type {'POLICY_DECISION'} */ ('POLICY_DECISION'),
+      ts: new Date().toISOString(),
+      buyer: accountId,
+      seller: quote.payTo,
+      service: quote.service,
+      amountHbar: quote.priceHbar,
+      policy: { ruleId: decision.ruleId, result: decision.decision, reason: decision.reason },
+      requestId: quote.requestId,
+    };
+    await submitEnvelope(client, topicId, auditEnv);
+    onSubmit?.(auditEnv);
+
+    if (decision.decision === 'DENY') {
+      const env = { ...auditEnv, type: /** @type {'DENIAL'} */ ('DENIAL') };
+      await submitEnvelope(client, topicId, env);
+      onSubmit?.(env);
+      return { kind: 'DENIED', requestId: quote.requestId, decision };
+    }
+
+    if (decision.decision === 'ESCALATE') {
+      const result = await transfer('RETURN_BYTES', quote.payTo, quote.priceHbar, quote.requestId);
+      const bytes =
+        result?.bytes instanceof Uint8Array
+          ? result.bytes
+          : result?.bytes
+            ? Uint8Array.from(result.bytes)
+            : null;
+      if (!bytes) throw new Error('RETURN_BYTES path produced no bytes blob');
+      return {
+        kind: 'ESCALATED',
+        requestId: quote.requestId,
+        decision,
+        unsignedTxBase64: Buffer.from(bytes).toString('base64'),
+        // synthesize a minimal SellerQuote shape so continueAfterApproval can work
+        quote: {
+          requestId: quote.requestId,
+          service: quote.service,
+          priceHbar: quote.priceHbar,
+          payTo: quote.payTo,
+          expiresAt: quote.expiresAt,
+          query: '{}',
+        },
+      };
+    }
+
+    // ALLOW — transfer + post SETTLEMENT. Caller is responsible for the
+    // actual service call (e.g. the x402 retry); the txId is what the seller
+    // verifies on the other end.
+    const transferOut = await transfer('AUTONOMOUS', quote.payTo, quote.priceHbar, quote.requestId);
+    const raw = transferOut?.raw;
+    if (raw?.status && raw.status !== 'SUCCESS') {
+      throw new Error(`transfer did not succeed: ${raw.status}`);
+    }
+    const txId = raw?.transactionId;
+    if (!txId) throw new Error('AUTONOMOUS transfer returned no transactionId');
+
+    const settleEnv = {
+      v: /** @type {1} */ (1),
+      type: /** @type {'SETTLEMENT'} */ ('SETTLEMENT'),
+      ts: new Date().toISOString(),
+      buyer: accountId,
+      seller: quote.payTo,
+      service: quote.service,
+      amountHbar: quote.priceHbar,
+      txId,
+      policy: { ruleId: decision.ruleId, result: decision.decision, reason: decision.reason },
+      requestId: quote.requestId,
+    };
+    await submitEnvelope(client, topicId, settleEnv);
+    onSubmit?.(settleEnv);
+
+    return {
+      kind: 'ALLOWED',
+      requestId: quote.requestId,
+      decision,
+      txId,
+      data: { count: 0, results: [] }, // not served here — caller does the service GET
+    };
+  }
+
+  return { request, continueAfterApproval, payQuote, accountId };
 }

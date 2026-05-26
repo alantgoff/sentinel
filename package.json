@@ -9,6 +9,7 @@
     "dev": "node --watch src/server/app.js",
     "smoke:balance": "node scripts/connectivity-smoke.js",
     "smoke:hcs": "node scripts/hcs-roundtrip.js",
+    "verify:tx": "node scripts/verify-tx.js",
     "x402:demo": "node scripts/x402-demo.js",
     "mcp": "node src/mcp-server.js",
     "test": "node --test --test-reporter=spec test/"
