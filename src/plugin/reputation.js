@@ -44,11 +44,23 @@ export async function buildReputationProfile({ mirror, topicId, counterparty, vi
   for (const { envelope } of settlementClaims) {
     if (!envelope || envelope.type !== 'SETTLEMENT') continue;
     const v = await mirror.verifyTransaction(envelope.txId);
-    const match = matchesExpectedTransfer(v, {
-      buyer: envelope.buyer,
-      seller: envelope.seller,
-      amountHbar: envelope.amountHbar,
-    });
+
+    /** @type {{ ok: true } | { ok: false, reason: string }} */
+    let match;
+    if (envelope.buyer === envelope.seller) {
+      // Single-account demo mode — mirror nets self-transfers entirely so
+      // there's no transfer-set to match. We accept the envelope as verified
+      // iff the transaction succeeded; the asymmetric-payment guarantee is
+      // documented as not applicable in this mode (see LIMITATIONS.md).
+      match = v.verified ? { ok: true } : { ok: false, reason: v.error ?? 'unverified' };
+    } else {
+      match = matchesExpectedTransfer(v, {
+        buyer: envelope.buyer,
+        seller: envelope.seller,
+        amountHbar: envelope.amountHbar,
+      });
+    }
+
     if (match.ok) {
       verifiedRecords.push({
         buyer: envelope.buyer,

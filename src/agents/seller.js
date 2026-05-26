@@ -36,6 +36,10 @@ import { runQuery, SERVICE_NAME, PRICE_HBAR_PER_QUERY, describeService, QuerySch
 
 const QUOTE_TTL_MS = 5 * 60 * 1000;
 const PAYMENT_WINDOW_MS = 10 * 60 * 1000; // settlement must have happened within this window
+// Mirror nodes lag the network by 2–6s in normal operation; retry transient
+// "not found" responses with backoff before declaring the payment unverified.
+const MIRROR_LAG_RETRIES = 8;
+const MIRROR_LAG_BASE_DELAY_MS = 1500;
 
 /**
  * @param {object} params
@@ -110,7 +114,18 @@ export function createSeller({ client, mirror, accountId, topicId, onSubmit }) {
       return { ok: false, reason: 'quote expired; please re-request a quote', status: 410 };
     }
 
-    const verification = await mirror.verifyTransaction(txId);
+    // Mirror nodes lag the network — retry transient 404s before giving up.
+    // We re-call verifyTransaction (it bakes the right URL); a 404 surfaces in
+    // the `error` field as "mirror 404 …" so we detect that and back off.
+    let verification = await mirror.verifyTransaction(txId);
+    for (let i = 0; i < MIRROR_LAG_RETRIES; i++) {
+      if (verification.verified) break;
+      const looksLikeLag =
+        verification.result === null && /mirror 404|no transaction record/i.test(verification.error ?? '');
+      if (!looksLikeLag) break;
+      await new Promise((r) => setTimeout(r, MIRROR_LAG_BASE_DELAY_MS * (i + 1)));
+      verification = await mirror.verifyTransaction(txId);
+    }
     if (!verification.verified) {
       return { ok: false, reason: `payment not verified: ${verification.error ?? verification.result}`, status: 402 };
     }
@@ -120,12 +135,25 @@ export function createSeller({ client, mirror, accountId, topicId, onSubmit }) {
         return { ok: false, reason: `payment is too old (consensus at ${verification.consensusTimestamp})`, status: 402 };
       }
     }
-    const match = matchesExpectedTransfer(verification, {
-      buyer,
-      seller: accountId,
-      amountHbar: q.priceHbar,
-    });
-    if (!match.ok) return { ok: false, reason: `payment does not match quote: ${match.reason}`, status: 402 };
+    if (buyer !== accountId) {
+      // Normal case: distinct buyer and seller. Mirror reports both legs of
+      // the transfer + the network fee; matchesExpectedTransfer asserts the
+      // seller credit and buyer debit each within 1 tinybar of the quote.
+      const match = matchesExpectedTransfer(verification, {
+        buyer,
+        seller: accountId,
+        amountHbar: q.priceHbar,
+      });
+      if (!match.ok) return { ok: false, reason: `payment does not match quote: ${match.reason}`, status: 402 };
+    } else {
+      // Single-account demo mode (buyer === seller): the Hedera ledger nets
+      // self-transfers entirely, so the mirror's transfers array contains
+      // only the network fee debit — there's no way to assert "+0.5 HBAR".
+      // The transaction-succeeded check + the consensus-window check above
+      // are still enforced; this is acknowledged in LIMITATIONS.md as a
+      // demo-only shortcut.
+      console.warn('[seller] buyer === seller — skipping transfer-set match (single-account demo mode)');
+    }
 
     q.servedTxId = txId;
     const data = runQuery(JSON.parse(q.query));

@@ -1,13 +1,24 @@
 import { z } from 'zod';
 import 'dotenv/config';
 
-const HederaAccountId = z
-  .string()
-  .regex(/^\d+\.\d+\.\d+$/, 'must look like 0.0.xxxxxx');
+// Treat "" and whitespace-only env values as unset. Many shells / hosting UIs
+// surface optional fields as empty strings rather than absent keys.
+const blankToUndef = (v) => {
+  if (typeof v !== 'string') return v;
+  const t = v.trim();
+  return t === '' ? undefined : t;
+};
 
-const PrivateKeyHex = z
+const accountIdSchema = z.string().regex(/^\d+\.\d+\.\d+$/, 'must look like 0.0.xxxxxx');
+const privateKeyHexSchema = z
   .string()
   .min(64, 'private key looks too short; paste the raw ECDSA key from portal.hedera.com');
+
+const HederaAccountId = z.preprocess(blankToUndef, accountIdSchema);
+const HederaAccountIdOptional = z.preprocess(blankToUndef, accountIdSchema.optional());
+const PrivateKeyHex = z.preprocess(blankToUndef, privateKeyHexSchema);
+const PrivateKeyHexOptional = z.preprocess(blankToUndef, privateKeyHexSchema.optional());
+const OptionalString = z.preprocess(blankToUndef, z.string().optional());
 
 const Network = z.enum(['testnet', 'previewnet', 'mainnet']);
 
@@ -16,8 +27,8 @@ const Schema = z
     BUYER_ACCOUNT_ID: HederaAccountId,
     BUYER_PRIVATE_KEY: PrivateKeyHex,
 
-    SELLER_ACCOUNT_ID: HederaAccountId.optional(),
-    SELLER_PRIVATE_KEY: PrivateKeyHex.optional(),
+    SELLER_ACCOUNT_ID: HederaAccountIdOptional,
+    SELLER_PRIVATE_KEY: PrivateKeyHexOptional,
 
     HEDERA_NETWORK: Network.default('testnet'),
     MIRROR_NODE_URL: z
@@ -25,15 +36,12 @@ const Schema = z
       .url()
       .default('https://testnet.mirrornode.hedera.com'),
 
-    SENTINEL_TOPIC_ID: z
-      .string()
-      .regex(/^\d+\.\d+\.\d+$/, 'must look like 0.0.xxxxxx')
-      .optional(),
+    SENTINEL_TOPIC_ID: HederaAccountIdOptional,
 
     LLM_PROVIDER: z.enum(['groq', 'openai']).default('groq'),
-    GROQ_API_KEY: z.string().optional(),
+    GROQ_API_KEY: OptionalString,
     GROQ_MODEL: z.string().default('llama-3.3-70b-versatile'),
-    OPENAI_API_KEY: z.string().optional(),
+    OPENAI_API_KEY: OptionalString,
     OPENAI_MODEL: z.string().default('gpt-4o-mini'),
 
     PORT: z.coerce.number().int().positive().default(3000),
@@ -53,20 +61,9 @@ const Schema = z
         path: ['HEDERA_NETWORK'],
       });
     }
-    if (env.LLM_PROVIDER === 'groq' && !env.GROQ_API_KEY) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'LLM_PROVIDER=groq but GROQ_API_KEY is not set.',
-        path: ['GROQ_API_KEY'],
-      });
-    }
-    if (env.LLM_PROVIDER === 'openai' && !env.OPENAI_API_KEY) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'LLM_PROVIDER=openai but OPENAI_API_KEY is not set.',
-        path: ['OPENAI_API_KEY'],
-      });
-    }
+    // LLM key validation is lazy — checked in src/llm.js when buildChatModel
+    // is actually called. The buyer/seller flow is deterministic and doesn't
+    // need an LLM, so smoke tests and the demo run fine without one.
   });
 
 let cached;

@@ -98,6 +98,18 @@ shortcut**; in any real deployment the buyer and seller are distinct
 accounts with distinct keys. The README's run instructions cover the
 two-account setup.
 
+**Specific consequence:** the Hedera ledger *nets self-transfers entirely*
+— if account A transfers 0.5 HBAR to account A, the mirror node's
+transfers array contains only the network-fee debit and shows no
+"+0.5 HBAR" credit. There is nothing to assert against. In single-account
+mode the seller and the reputation scorer both fall back to "the
+transaction succeeded" verification (the consensus-window and replay
+defenses are still enforced), and a `[seller] buyer === seller …` warning
+is logged. With two distinct accounts the full transfer-set match runs;
+that is the production code path. See `src/agents/seller.js` and
+`src/plugin/reputation.js` — both branches are explicit and documented at
+the call site.
+
 ### 6. Pending escalations are in-memory
 The Express server stores pending escalations (`requestId → { decision,
 quote }`) in process memory. A restart drops them — the user must
