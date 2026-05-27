@@ -16,5 +16,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --check src/server/app.js
-      - run: node --check src/mcp-server.js
+      - run: node --check src/bootstrap.js
       - run: npm test
