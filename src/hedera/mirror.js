@@ -164,6 +164,30 @@ export function createMirrorClient({ baseUrl, fetchImpl = globalThis.fetch, time
 }
 
 /**
+ * Verify a transaction with retry-with-backoff for transient mirror-node lag.
+ * Mirror nodes typically lag the network by 2–6s; a 404 right after consensus
+ * is normal propagation, not fraud. Retries up to ~12s total.
+ *
+ * @param {MirrorClient} mirror
+ * @param {string} txId
+ * @param {{ retries?: number, baseDelayMs?: number }} [opts]
+ * @returns {Promise<TxVerification>}
+ */
+export async function verifyWithRetry(mirror, txId, opts = {}) {
+  const retries = opts.retries ?? 8;
+  const baseDelayMs = opts.baseDelayMs ?? 1500;
+  let v = await mirror.verifyTransaction(txId);
+  for (let i = 0; i < retries; i++) {
+    if (v.verified) return v;
+    const isLag = v.result === null && /mirror 404|no transaction record/i.test(v.error ?? '');
+    if (!isLag) return v;
+    await new Promise((r) => setTimeout(r, baseDelayMs * (i + 1)));
+    v = await mirror.verifyTransaction(txId);
+  }
+  return v;
+}
+
+/**
  * Confirm an expected HBAR transfer of `amountHbar` to `seller`, paid by
  * `buyer`. The seller-credit assertion is exact (within 1 tinybar); the
  * buyer-debit assertion is "at least the transfer amount" because the buyer

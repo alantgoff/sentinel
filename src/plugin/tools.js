@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { submitEnvelope } from '../hedera/hcs.js';
-import { matchesExpectedTransfer } from '../hedera/mirror.js';
+import { matchesExpectedTransfer, verifyWithRetry } from '../hedera/mirror.js';
 import { pricePremium, maxLikelyPayoutHbar } from '../pricing/pricer.js';
 import { calibrate, H100_MONTHLY } from '../pricing/calibration.js';
 import { poolBalanceHbar } from '../pool/pool.js';
@@ -117,7 +117,9 @@ export function buildTools({
       execute: async (client, _ctx, input) => {
         const R0 = priceFeed.getRT();
         // Verify the premium transfer (within 1 tinybar; sender = buyer; recipient = underwriter).
-        const v = await mirror.verifyTransaction(input.premiumTxId);
+        // Use retry-with-backoff because mirror nodes lag 2–6s behind consensus
+        // and a 404 immediately after the transfer is normal propagation, not fraud.
+        const v = await verifyWithRetry(mirror, input.premiumTxId);
         if (!v.verified) {
           throw new Error(`premium tx not verified: ${v.error ?? v.result}`);
         }
