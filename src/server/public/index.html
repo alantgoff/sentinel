@@ -4,45 +4,117 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Aegis — cost-cap underwriter on Hedera</title>
-<style>
-  :root { color-scheme: dark; }
-  body { background:#0b0d12; color:#e6e8ee; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; line-height:1.55; padding:48px 22px; max-width:780px; margin:0 auto; }
-  a { color:#5cb8ff; }
-  h1 { letter-spacing:0.2px; margin-bottom:4px; }
-  .sub { color:#8b93a7; }
-  .card { background:#141821; border:1px solid #262d3d; border-radius:10px; padding:18px 22px; margin-top:22px; }
-  code { background:#1b2030; padding:1px 6px; border-radius:4px; font-family:ui-monospace,monospace; font-size:13px; }
-  pre { background:#0f141e; border:1px solid #262d3d; border-radius:8px; padding:12px; font-family:ui-monospace,monospace; font-size:12.5px; overflow-x:auto; }
-  .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:rgba(245,158,11,0.18); color:#f59e0b; font-size:11.5px; font-weight:600; letter-spacing:0.4px; }
-</style>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <span class="tag">UNDER CONSTRUCTION</span>
-  <h1>Aegis</h1>
-  <p class="sub">Autonomous underwriter on Hedera selling cost-cap options on H100 GPU-hour rentals. Cash settle now; in-kind compute is roadmap. Pricing via Monte Carlo over a mean-reverting jump-diffusion process calibrated to public GPU-rental history; payouts gated by <code>AgentMode.RETURN_BYTES</code> human approval.</p>
-
-  <div class="card">
-    <h2>Building toward the demo flow</h2>
-    <ol>
-      <li>Buyer requests a cap (strike, notional, window) → live Monte Carlo premium quote</li>
-      <li>Buyer pays premium in HBAR → <code>POLICY</code> envelope posted to HCS</li>
-      <li>Price feed runs (calibrated jump-diffusion); "inject shock" button is available</li>
-      <li>At expiry: underwriter computes payout, builds the unsigned tx, surfaces it for human approval</li>
-      <li>Human signs → payout settles → <code>SETTLEMENT</code> envelope posted → mirror-verified</li>
-    </ol>
-    <p>Plumbing (kit wiring, HCS submit/read, mirror-node verifier, server scaffold, CI, Render deploy, x402 surface) is carried over from the prior Sentinel build; pricing model, plugin, agents, and UI are being rewritten.</p>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">Aegis</span>
+    <span class="brand-sub">cost-cap options on H100 GPU-hour rentals · settled on Hedera</span>
   </div>
+  <nav class="topbar-meta" id="meta"></nav>
+</header>
 
-  <div class="card">
-    <h2>Submission for the Hedera AI Agent Bounty — Week 5: Policy Agent</h2>
-    <ul>
-      <li>Deadline: <strong>2026-06-21 23:59 UTC</strong></li>
-      <li>Network: <strong>testnet only</strong> (mainnet refused at the schema layer)</li>
-      <li>Repo: <a href="https://github.com/alantgoff/aegis">github.com/alantgoff/aegis</a></li>
-      <li>Trust boundary: <a href="/LIMITATIONS.md">LIMITATIONS.md</a></li>
-    </ul>
-  </div>
+<main class="wrap">
 
-  <p class="sub" style="margin-top:36px">Server health: <a href="/healthz"><code>/healthz</code></a> · Config introspection: <a href="/api/config"><code>/api/config</code></a></p>
+  <!-- LIVE PRICE STRIP -->
+  <section class="card price-card">
+    <div class="price-head">
+      <div>
+        <h2>Live reference R(t)</h2>
+        <p class="hint">Mean-reverting jump-diffusion calibrated to public H100 rental history (Jan 2023 → Dec 2025). The live path is <strong>simulated and labeled</strong> — see <code id="feed-source">…</code>. <a href="/LIMITATIONS.md">Why not a real feed?</a></p>
+      </div>
+      <div class="price-now">
+        <span class="rt" id="rt">—</span><span class="unit">USD/hr</span>
+        <div class="day">day <span id="day">0</span></div>
+      </div>
+    </div>
+    <svg id="chart" viewBox="0 0 800 180" preserveAspectRatio="none"></svg>
+    <div class="price-actions">
+      <button id="shock-btn" class="danger">Inject shock ×1.6</button>
+      <button id="advance-btn" class="ghost">Fast-forward 5 days</button>
+      <button id="advance-30-btn" class="ghost">Fast-forward 30 days</button>
+    </div>
+  </section>
+
+  <!-- BUY A POLICY -->
+  <section class="grid">
+    <div class="card">
+      <h2>1. Quote a cap</h2>
+      <p class="hint">Pay a premium today; if R rises above your strike during the window, the underwriter reimburses <code>max(0, R−K)·Q</code>. Premium pricing is Monte Carlo over 5000 paths.</p>
+      <form id="quote-form" class="stack">
+        <label>Strike K (USD/hr)
+          <input type="number" name="strikeUsdHr" min="0.1" step="0.1" value="4.0">
+        </label>
+        <label>Notional Q (GPU-hours)
+          <input type="number" name="qtyGpuHr" min="1" step="1" value="10">
+        </label>
+        <label>Window (days)
+          <input type="number" name="windowDays" min="1" max="180" value="30">
+        </label>
+        <button type="submit" id="quote-btn">Quote</button>
+      </form>
+      <div id="quote-out" hidden>
+        <h3>Quote</h3>
+        <dl class="kv" id="quote-kv"></dl>
+        <button id="buy-btn">Pay premium &amp; issue policy</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2. Active policies</h2>
+      <p class="hint">Issued policies, sorted by expiry. Click <strong>Settle</strong> at or after expiry to compute payout against the current R.</p>
+      <table class="policies">
+        <thead><tr><th>policyId</th><th>buyer</th><th>K</th><th>Q</th><th>maxPayout</th><th>expires</th><th></th></tr></thead>
+        <tbody id="policy-body"><tr><td colspan="7" class="muted">none yet</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- POOL -->
+  <section class="card pool-card">
+    <h2>3. Pool &amp; exposure</h2>
+    <div class="pool-row">
+      <div class="pool-stat"><span class="label">balance</span><span class="val" id="pool-balance">—</span><span class="unit">HBAR</span></div>
+      <div class="pool-stat"><span class="label">max exposure</span><span class="val" id="pool-max">—</span><span class="unit">HBAR</span></div>
+      <div class="pool-stat"><span class="label">current</span><span class="val" id="pool-current">—</span><span class="unit">HBAR</span></div>
+      <div class="pool-stat"><span class="label">headroom</span><span class="val" id="pool-headroom">—</span><span class="unit">HBAR</span></div>
+      <div class="pool-stat"><span class="label">active policies</span><span class="val" id="pool-count">—</span></div>
+    </div>
+    <div class="pool-bar"><div class="pool-bar-fill" id="pool-bar-fill"></div></div>
+  </section>
+
+  <!-- ESCALATION -->
+  <section class="card" id="approval-card" hidden>
+    <h2>Payout above autonomous cap — awaiting approval</h2>
+    <p class="hint">The settlement computed a payout above the autonomous cap of <strong id="autocap">10</strong> HBAR. The underwriter built the transfer in <code>RETURN_BYTES</code> mode — no funds move without your signature.</p>
+    <dl class="kv" id="approval-kv"></dl>
+    <details><summary>Unsigned transaction bytes</summary><pre id="approval-bytes"></pre></details>
+    <div class="actions">
+      <button id="approve-btn">Approve &amp; sign</button>
+      <button id="reject-btn" class="ghost">Reject</button>
+    </div>
+  </section>
+
+  <!-- LEDGER -->
+  <section class="card">
+    <h2>4. HCS ledger (Aegis topic)</h2>
+    <p class="hint">Every <code>POLICY</code>, <code>PRICE_REF</code>, <code>SETTLEMENT</code>, and <code>PROVIDER_CAPACITY</code> envelope on the topic. Read independently from the mirror node; click any txId/account to open HashScan.</p>
+    <button id="refresh-btn" class="ghost">Refresh</button>
+    <table class="ledger">
+      <thead><tr><th>#</th><th>ts</th><th>type</th><th>summary</th></tr></thead>
+      <tbody id="ledger-body"></tbody>
+    </table>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <span>Hedera AI Agent Bounty — Week 5: Policy Agent</span>
+  <span><a href="https://github.com/alantgoff/aegis">github.com/alantgoff/aegis</a></span>
+  <span><a href="/LIMITATIONS.md">LIMITATIONS</a></span>
+</footer>
+
+<script src="/app.js" type="module"></script>
 </body>
 </html>
