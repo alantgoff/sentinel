@@ -2,7 +2,7 @@ import { Client, PrivateKey, AccountId } from '@hashgraph/sdk';
 
 /**
  * Build a Hedera SDK Client for the given network and operator credentials.
- * Sentinel only ever calls this with testnet — the config layer rejects mainnet.
+ * Aegis only ever calls this with testnet — the config layer rejects mainnet.
  *
  * @param {object} params
  * @param {'testnet'|'previewnet'|'mainnet'} params.network
@@ -20,7 +20,7 @@ export function buildClient({ network, accountId, privateKey }) {
       client = Client.forPreviewnet();
       break;
     case 'mainnet':
-      throw new Error('Sentinel refuses to construct a mainnet client.');
+      throw new Error('Aegis refuses to construct a mainnet client.');
     default:
       throw new Error(`Unknown network: ${network}`);
   }

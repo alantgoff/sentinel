@@ -3,7 +3,7 @@ import { normalizeTxId } from './envelope.js';
 /**
  * Thin HTTP client for the Hedera mirror node REST API.
  *
- * Sentinel uses this for the parts of the trust boundary that the operator's
+ * Aegis uses this for the parts of the trust boundary that the operator's
  * own keys can't fake:
  *   - confirming a referenced `txId` actually settled and matches the parties/amount
  *   - reading topic messages (which the operator never wrote to via the kit's

@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 /**
- * HCS roundtrip smoke test — task M1c in HANDOFF.
+ * HCS roundtrip smoke test — task M1c → A1 in HANDOFF.
  *
- * If SENTINEL_TOPIC_ID is unset, creates a new Sentinel topic on testnet and
+ * If AEGIS_TOPIC_ID is unset, creates a new Aegis topic on testnet and
  * prints the id to paste into .env. Otherwise reuses the existing one.
  *
- * Then submits a sample SETTLEMENT envelope and reads the topic back via the
- * mirror REST API (the same path the reputation scorer will use).
+ * Then submits a sample PRICE_REF envelope (the lightest Aegis envelope —
+ * no on-chain transfer required to be honest) and reads the topic back via
+ * the mirror REST API.
  */
 import { loadConfig } from '../src/config.js';
 import { buildClient } from '../src/hedera/client.js';
 import { createMirrorClient } from '../src/hedera/mirror.js';
-import { createSentinelTopic, submitEnvelope, readEnvelopes } from '../src/hedera/hcs.js';
+import { createTopic, submitEnvelope, readEnvelopes } from '../src/hedera/hcs.js';
 
 function log(label, value) {
   console.log(`\n=== ${label} ===`);
@@ -19,14 +20,6 @@ function log(label, value) {
   else console.log(JSON.stringify(value, null, 2));
 }
 
-/**
- * Poll the mirror node for our message — mirror lag is usually 2–6 seconds.
- *
- * @param {import('../src/hedera/mirror.js').MirrorClient} mirror
- * @param {string} topicId
- * @param {number} sequenceNumber
- * @param {number} timeoutMs
- */
 async function waitForMessage(mirror, topicId, sequenceNumber, timeoutMs = 30_000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -50,29 +43,20 @@ async function main() {
   let topicId = cfg.AEGIS_TOPIC_ID;
   if (!topicId) {
     log('No AEGIS_TOPIC_ID set — creating a new topic', '');
-    topicId = await createSentinelTopic(client, { memo: 'aegis.v1' });
+    topicId = await createTopic(client, { memo: 'aegis.v1' });
     log('Created topic', topicId);
     console.log(`\n→ Paste this into your .env:    AEGIS_TOPIC_ID=${topicId}\n`);
   } else {
     log('Reusing existing topic', topicId);
   }
 
-  const underwriter = cfg.UNDERWRITER_ACCOUNT_ID ?? cfg.BUYER_ACCOUNT_ID;
-  // Placeholder envelope shape — replaced when the Aegis envelope schema lands
-  // in commit A1 (POLICY / PRICE_REF / SETTLEMENT / PROVIDER_CAPACITY). Until
-  // then this script exercises the same HCS round-trip the existing envelope
-  // module supports.
   /** @type {import('../src/hedera/envelope.js').EnvelopeT} */
   const sample = {
     v: 1,
-    type: 'QUOTE',
+    type: 'PRICE_REF',
     ts: new Date().toISOString(),
-    buyer: cfg.BUYER_ACCOUNT_ID,
-    seller: underwriter,
-    service: 'aegis-pivot-smoke',
-    amountHbar: 0.5,
-    requestId: `smoke-${Date.now()}`,
-    quoteExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+    observedUsdHr: cfg.DEFAULT_R0_USD_HR,
+    source: 'sim:labeled',
   };
   log('Submitting envelope', sample);
 
@@ -83,7 +67,7 @@ async function main() {
   const hit = await waitForMessage(mirror, topicId, sequenceNumber);
   log('Mirror returned', { raw: hit.raw, envelope: hit.envelope });
 
-  if (!hit.envelope || hit.envelope.requestId !== sample.requestId) {
+  if (!hit.envelope || hit.envelope.type !== 'PRICE_REF' || hit.envelope.observedUsdHr !== sample.observedUsdHr) {
     throw new Error('mirror returned a different message than we submitted');
   }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Verify a Hedera transaction id against the mirror node — the same primitive
- * the Sentinel reputation scorer uses to confirm settlements.
+ * the Aegis settlement state machine uses to confirm premium / payout transfers.
  *
  * Usage:
  *   node scripts/verify-tx.js 0.0.1001@1716736800.123456789

@@ -12,15 +12,15 @@ import { encodeEnvelope, decodeEnvelope, parseEnvelope } from './envelope.js';
  */
 
 /**
- * Create the Sentinel topic. Returns the new topic id as a string.
+ * Create a topic for the Aegis envelope stream. Returns the new topic id.
  *
  * @param {import('@hashgraph/sdk').Client} client
  * @param {object} [opts]
  * @param {string} [opts.memo]
  * @returns {Promise<string>}
  */
-export async function createSentinelTopic(client, opts = {}) {
-  const memo = opts.memo ?? 'sentinel.v1';
+export async function createTopic(client, opts = {}) {
+  const memo = opts.memo ?? 'aegis.v1';
   const tx = await new TopicCreateTransaction().setTopicMemo(memo).execute(client);
   const receipt = await tx.getReceipt(client);
   const id = receipt.topicId;
@@ -29,7 +29,7 @@ export async function createSentinelTopic(client, opts = {}) {
 }
 
 /**
- * Submit a Sentinel envelope to the topic. Envelope is validated before send.
+ * Submit an Aegis envelope to the topic. Envelope is validated before send.
  *
  * @param {import('@hashgraph/sdk').Client} client
  * @param {string} topicId
@@ -52,7 +52,7 @@ export async function submitEnvelope(client, topicId, env) {
 
 /**
  * Read all envelopes from a topic via the mirror node. Returns a parallel array
- * of `{ raw, envelope }` — `envelope` is null if the message wasn't a Sentinel
+ * of `{ raw, envelope }` — `envelope` is null if the message wasn't an Aegis
  * envelope (someone else posted to the topic, or the JSON was malformed).
  *
  * Heavy lifting (pagination) is in createMirrorClient.streamTopicMessages.
