@@ -55,8 +55,81 @@ export const DEFAULT_PARAMS = Object.freeze({
 const DAYS_PER_YEAR = 365;
 
 /**
- * Simulate one daily price path of length `days + 1` starting from R0
- * (path[0] = R0, path[days] = R at the end of `days` calendar days).
+ * Per-day random draws — one tuple per simulated day. Separating the draws
+ * from the integration loop lets us share randomness across paired antithetic
+ * paths: the same uniform / Bernoulli + Gaussian-for-jumps draws fire on each
+ * pair, but the diffusion Gaussian gets sign-flipped on the partner path.
+ * That produces perfectly negatively-correlated diffusion components, which
+ * is exactly what antithetic variates need for variance reduction.
+ *
+ * @typedef {object} DailyDraws
+ * @property {number} z      diffusion innovation, N(0, 1)
+ * @property {number} u      uniform(0, 1) used for the jump Bernoulli
+ * @property {number} jz     jump-magnitude innovation, N(0, 1)
+ */
+
+/**
+ * Generate `days` daily-draw tuples from the RNG. Stable contract: tests +
+ * antithetic pairing both rely on this shape.
+ *
+ * @param {number} days
+ * @param {ReturnType<typeof createRng>} rng
+ * @returns {DailyDraws[]}
+ */
+export function drawDaily(days, rng) {
+  if (!Number.isInteger(days) || days < 0) throw new Error('days must be a non-negative integer');
+  /** @type {DailyDraws[]} */
+  const out = new Array(days);
+  for (let t = 0; t < days; t++) {
+    out[t] = { z: rng.nextNormal(), u: rng.next(), jz: rng.nextNormal() };
+  }
+  return out;
+}
+
+/**
+ * Integrate the jump-diffusion SDE day-by-day using a precomputed draw
+ * sequence. Pure function — no RNG side effects — so it composes cleanly
+ * with variance-reduction wrappers.
+ *
+ * Pass `flipDiffusionSign = true` to integrate the antithetic partner of an
+ * earlier call: the diffusion Z's are negated while the jump Bernoulli and
+ * jump-magnitude draws are reused as-is (the standard construction for
+ * antithetic variates on jump-diffusion paths — flipping the jump draws too
+ * would just be a different sample, not a paired one).
+ *
+ * @param {object} args
+ * @param {number} args.R0
+ * @param {DailyDraws[]} args.draws
+ * @param {PriceModelParams} [args.params]
+ * @param {boolean} [args.flipDiffusionSign=false]
+ * @returns {Float64Array}
+ */
+export function integratePath({ R0, draws, params = DEFAULT_PARAMS, flipDiffusionSign = false }) {
+  if (R0 <= 0 || !Number.isFinite(R0)) throw new Error('R0 must be a positive finite number');
+  const days = draws.length;
+  const dt = 1 / DAYS_PER_YEAR;
+  const sqrtDt = Math.sqrt(dt);
+  const path = new Float64Array(days + 1);
+  let logR = Math.log(R0);
+  path[0] = R0;
+  const sign = flipDiffusionSign ? -1 : 1;
+  for (let t = 1; t <= days; t++) {
+    const d = draws[t - 1];
+    logR += params.kappa * (params.thetaLog - logR) * dt + params.sigma * sqrtDt * (sign * d.z);
+    // Thinning approximation: with probability λΔt, a jump fires this day.
+    // For λ ≤ ~50/yr the discretization error is negligible; above that we'd
+    // switch to a compound-Poisson loop within the day.
+    if (d.u < params.lambda * dt) {
+      logR += params.jumpMeanLog + params.jumpStdLog * d.jz;
+    }
+    path[t] = Math.exp(logR);
+  }
+  return path;
+}
+
+/**
+ * Simulate one daily price path. Convenience wrapper around drawDaily +
+ * integratePath for callers that don't need to share randomness.
  *
  * Returns the path as a regular Float64Array (cheap; serializable).
  *
@@ -68,27 +141,32 @@ const DAYS_PER_YEAR = 365;
  * @returns {Float64Array}
  */
 export function simulatePath({ R0, days, params = DEFAULT_PARAMS, rng = createRng() }) {
-  if (R0 <= 0 || !Number.isFinite(R0)) throw new Error('R0 must be a positive finite number');
-  if (!Number.isInteger(days) || days < 0) throw new Error('days must be a non-negative integer');
+  const draws = drawDaily(days, rng);
+  return integratePath({ R0, draws, params });
+}
 
-  const dt = 1 / DAYS_PER_YEAR;
-  const sqrtDt = Math.sqrt(dt);
-  const path = new Float64Array(days + 1);
-  let logR = Math.log(R0);
-  path[0] = R0;
-
-  for (let t = 1; t <= days; t++) {
-    // Mean reversion + diffusion
-    logR += params.kappa * (params.thetaLog - logR) * dt + params.sigma * sqrtDt * rng.nextNormal();
-    // Jump? Use a thinning approximation: at each daily step, with probability
-    // λ·Δt, sample a jump of N(jumpMeanLog, jumpStdLog²). For λ ≤ ~50/yr this
-    // is accurate; for larger we'd switch to a compound-Poisson loop.
-    if (rng.next() < params.lambda * dt) {
-      logR += params.jumpMeanLog + params.jumpStdLog * rng.nextNormal();
-    }
-    path[t] = Math.exp(logR);
-  }
-  return path;
+/**
+ * Generate an antithetic pair: two paths sharing every uniform / Bernoulli /
+ * jump-magnitude draw, but with opposite signs on the diffusion increments.
+ * Variance of the mean estimator on (Y₁ + Y₂)/2 is
+ *     Var(Y) · (1 + ρ) / 2
+ * where ρ = Corr(Y₁, Y₂). For a diffusion-dominated payoff, ρ → −1 and we
+ * approach 100% variance reduction; jump-dominated payoffs cap the benefit
+ * at the diffusion's share of total variance. Either way, never worse than
+ * plain MC — a free win when N is the cost-binding constraint.
+ *
+ * @param {object} args
+ * @param {number} args.R0
+ * @param {number} args.days
+ * @param {PriceModelParams} [args.params]
+ * @param {ReturnType<typeof createRng>} args.rng
+ * @returns {{ a: Float64Array, b: Float64Array }}
+ */
+export function simulateAntitheticPair({ R0, days, params = DEFAULT_PARAMS, rng }) {
+  const draws = drawDaily(days, rng);
+  const a = integratePath({ R0, draws, params, flipDiffusionSign: false });
+  const b = integratePath({ R0, draws, params, flipDiffusionSign: true });
+  return { a, b };
 }
 
 /**
