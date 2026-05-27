@@ -189,6 +189,37 @@ function round8(x) { return Math.round(x * 1e8) / 1e8; }
 function round4(x) { return Math.round(x * 1e4) / 1e4; }
 
 /**
+ * Sample R_T from the stressed regime — used by the exposure book's joint-VaR
+ * check. Pinning to squeeze regime gives the conservative side of joint
+ * payout estimation.
+ *
+ * @param {object} args
+ * @param {number} args.R0
+ * @param {number} args.windowDays
+ * @param {number} [args.paths=5000]
+ * @param {import('./price-model.js').PriceModelParams} [args.params=DEFAULT_PARAMS]
+ * @param {number | bigint} [args.seed]
+ * @returns {number[]}
+ */
+export function sampleStressedRT({
+  R0, windowDays, paths = 5000,
+  params = DEFAULT_PARAMS, seed,
+}) {
+  const stressParams = params.regimes
+    ? { ...params, initialSqueezeProb: 1 }
+    : params;
+  const rng = createRng(seed);
+  const numPairs = Math.ceil(paths / 2);
+  const out = new Array(numPairs * 2);
+  for (let i = 0; i < numPairs; i++) {
+    const { a, b } = simulateAntitheticPair({ R0, days: windowDays, params: stressParams, rng });
+    out[2 * i] = a[windowDays];
+    out[2 * i + 1] = b[windowDays];
+  }
+  return out;
+}
+
+/**
  * Max-likely payout estimator used by the pool's exposure book to reserve
  * worst-case obligation per policy. Uses a STRESS distribution rather than
  * the current-regime distribution: the pool needs to cover the policy even

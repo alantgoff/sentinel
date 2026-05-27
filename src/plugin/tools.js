@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { randomUUID } from 'node:crypto';
 import { submitEnvelope } from '../hedera/hcs.js';
 import { matchesExpectedTransfer, verifyWithRetry } from '../hedera/mirror.js';
-import { pricePremium, maxLikelyPayoutHbar } from '../pricing/pricer.js';
+import { pricePremium, maxLikelyPayoutHbar, sampleStressedRT } from '../pricing/pricer.js';
 import { calibrate, H100_MONTHLY } from '../pricing/calibration.js';
 import { emCalibrate } from '../pricing/em-calibration.js';
 import { poolBalanceHbar } from '../pool/pool.js';
@@ -132,12 +132,35 @@ export function buildTools({
         if (!m.ok) throw new Error(`premium transfer does not match quote: ${m.reason}`);
 
         const balance = await poolBalanceHbar(mirror, underwriterAccountId);
-        const exposureCheck = exposure.checkIssuance({
+        // Joint-VaR check: simulates the joint payout of (every active
+        // policy + this one) under the stressed regime and refuses if the
+        // 99% quantile exceeds the pool cap. Strictly more accurate than
+        // Σ-maxPayout because it accounts for the comonotone-but-not-equal
+        // payouts of heterogeneous-strike policies on the same underlying.
+        const exposureCheck = exposure.checkIssuanceJointVaR({
           poolBalanceHbar: balance,
-          proposedMaxPayoutHbar: input.maxPayoutHbar,
+          proposedPolicy: {
+            policyId: 'PROPOSED',
+            buyer: input.buyer,
+            strikeUsdHr: input.strikeUsdHr,
+            qtyGpuHr: input.qtyGpuHr,
+            maxPayoutCapUsd: input.maxPayoutUsd,
+            maxPayoutHbar: input.maxPayoutHbar,
+            windowEndsTs: new Date(Date.now() + input.windowDays * 86_400_000).toISOString(),
+          },
+          rTSampler: ({ paths: p }) => sampleStressedRT({
+            R0,
+            windowDays: input.windowDays,
+            paths: p,
+            params: priceParams,
+            seed: input.seed,
+          }),
+          hbarUsdPrice,
+          quantile: 0.99,
+          paths: 5000,
         });
         if (!exposureCheck.ok) {
-          throw new Error(`exposure check failed: ${exposureCheck.reason}`);
+          throw new Error(`joint-VaR exposure check failed: ${exposureCheck.reason}`);
         }
 
         const policyId = `pol-${randomUUID()}`;
@@ -183,10 +206,15 @@ export function buildTools({
         const { sequenceNumber } = await submitEnvelope(client, topicId, env);
         onSubmit?.(env);
 
-        // Reserve the worst-case payout in the exposure book.
+        // Reserve in the exposure book WITH the K/Q metadata, so future
+        // joint-VaR checks include this policy's payout function rather
+        // than treating it as a flat maxPayoutHbar reservation.
         exposure.add({
           policyId,
           buyer: input.buyer,
+          strikeUsdHr: input.strikeUsdHr,
+          qtyGpuHr: input.qtyGpuHr,
+          maxPayoutCapUsd: input.maxPayoutUsd,
           maxPayoutHbar: input.maxPayoutHbar,
           windowEndsTs,
         });

@@ -168,16 +168,22 @@ test('ISSUE refuses when proposed exposure would exceed pool cap', async () => {
       { account: '0.0.UW', amount: tinybars,  isApproval: false },
     ],
   };
-  // Re-build with the success mirror.
+  // Re-build with the success mirror. Pre-load an active policy with K/Q so
+  // the joint-VaR check has K/Q to integrate.
   const { tools: tools2, exposure: exp2 } = build({ poolBalanceHbar: 100, verifyResult });
-  exp2.add({ policyId: 'p0', buyer: '0.0.B', maxPayoutHbar: 40, windowEndsTs: '2026-12-30T00:00:00.000Z' });
+  exp2.add({
+    policyId: 'p0', buyer: '0.0.B',
+    strikeUsdHr: 3, qtyGpuHr: 1000,  // big notional → big joint exposure
+    maxPayoutHbar: 40,
+    windowEndsTs: '2026-12-30T00:00:00.000Z',
+  });
   const issue2 = findTool(tools2, TOOL_NAMES.ISSUE);
   await assert.rejects(
     issue2.execute({}, {}, {
       buyer: '0.0.B',
-      strikeUsdHr: 4, qtyGpuHr: 100, windowDays: 30,
-      premiumHbar: 5, premiumTxId: '0.0.B@1.1', maxPayoutHbar: 20,  // 40 + 20 = 60 > 50
+      strikeUsdHr: 4, qtyGpuHr: 1000, windowDays: 30,
+      premiumHbar: 5, premiumTxId: '0.0.B@1.1', maxPayoutHbar: 20,
     }),
-    /exposure check failed/,
+    /joint-VaR exposure check failed/,
   );
 });

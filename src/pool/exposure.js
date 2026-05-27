@@ -24,6 +24,9 @@
  * @property {string} buyer
  * @property {number} maxPayoutHbar       worst-case obligation of this policy
  * @property {string} windowEndsTs        ISO — used to expire policies from the active set
+ * @property {number} [strikeUsdHr]       enables joint-VaR exposure (needed for the joint payout function)
+ * @property {number} [qtyGpuHr]
+ * @property {number} [maxPayoutCapUsd]   per-policy USD cap, if set on the contract
  *
  * @typedef {object} ExposureBookSnapshot
  * @property {number} poolBalanceHbar
@@ -38,6 +41,15 @@
  * @property {string} [reason]
  * @property {ExposureBookSnapshot} snapshot
  * @property {number} proposedExposureHbar
+ *
+ * @typedef {object} JointCheckResult
+ * @property {boolean} ok
+ * @property {string} [reason]
+ * @property {ExposureBookSnapshot} snapshot
+ * @property {number} jointVarHbar          requested-quantile joint payout in HBAR
+ * @property {number} jointMaxHbar          empirical max joint payout across simulated paths
+ * @property {number} pathsUsed
+ * @property {number} quantile
  */
 
 /**
@@ -150,9 +162,95 @@ export function createExposureBook({ maxExposureRatio }) {
   function has(policyId) { return active.has(policyId); }
   function get(policyId) { return active.get(policyId); }
 
+  /**
+   * Joint-payout VaR check. Stricter than checkIssuance because it accounts
+   * for the dependence structure: all active and proposed policies pay out
+   * against the SAME underlying R, so their joint payout distribution is
+   * comonotone in R — Σ-maxPayout is the comonotone upper bound, but the
+   * 99% quantile of the joint payout sum sits *below* that bound for any
+   * heterogeneous strike basket.
+   *
+   * The caller supplies a simulator that returns R_T samples (typically
+   * from the stressed regime — see maxLikelyPayoutHbar). For each sample,
+   * we evaluate every active policy's payout + the proposed policy's
+   * payout, sum, then take the q-quantile of the sum. If that joint q-VaR
+   * fits inside the pool cap, the policy is acceptable. Otherwise we
+   * refuse with the actual VaR number in the reason.
+   *
+   * Approximation: all policies are evaluated at a single shared R_T from
+   * the simulator (so we're effectively asking "what's the joint payout if
+   * the squeeze regime sends R to value x at expiry"). Active policies
+   * whose windows have already expired in real wall time would not actually
+   * pay against this R, but they're already booked into the basket — this
+   * is conservative.
+   *
+   * @param {object} args
+   * @param {number} args.poolBalanceHbar
+   * @param {ActivePolicy & { strikeUsdHr: number, qtyGpuHr: number, maxPayoutCapUsd?: number }} args.proposedPolicy
+   * @param {(args: { paths: number }) => number[]} args.rTSampler   stressed R_T samples
+   * @param {number} args.hbarUsdPrice
+   * @param {number} [args.quantile=0.99]
+   * @param {number} [args.paths=5000]
+   * @returns {JointCheckResult}
+   */
+  function checkIssuanceJointVaR({
+    poolBalanceHbar, proposedPolicy, rTSampler,
+    hbarUsdPrice, quantile = 0.99, paths = 5000,
+  }) {
+    if (!(quantile > 0 && quantile < 1)) throw new Error('quantile must be in (0, 1)');
+    if (!(hbarUsdPrice > 0)) throw new Error('hbarUsdPrice must be positive');
+    const snap = snapshot(poolBalanceHbar);
+
+    const basket = [...active.values(), proposedPolicy];
+    // Filter to policies with the K/Q metadata needed for joint payout.
+    // Anything missing K/Q (legacy records) gets its maxPayoutHbar treated
+    // as a deterministic worst-case contribution — conservatively added in
+    // full. The proposed policy is always required to have K/Q.
+    if (typeof proposedPolicy.strikeUsdHr !== 'number' || typeof proposedPolicy.qtyGpuHr !== 'number') {
+      throw new Error('proposedPolicy must include strikeUsdHr and qtyGpuHr for joint-VaR');
+    }
+    const sampleable = basket.filter((p) => typeof p.strikeUsdHr === 'number' && typeof p.qtyGpuHr === 'number');
+    const fixedHbar = basket
+      .filter((p) => typeof p.strikeUsdHr !== 'number' || typeof p.qtyGpuHr !== 'number')
+      .reduce((a, p) => a + p.maxPayoutHbar, 0);
+
+    const samples = rTSampler({ paths });
+    const N = samples.length;
+    if (N === 0) throw new Error('rTSampler returned zero samples');
+    const sums = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+      const r = samples[i];
+      let sumUsd = 0;
+      for (const p of sampleable) {
+        const payoutUsd = Math.max(0, r - /** @type {number} */ (p.strikeUsdHr)) * /** @type {number} */ (p.qtyGpuHr);
+        const cap = p.maxPayoutCapUsd ?? Infinity;
+        sumUsd += Math.min(payoutUsd, cap);
+      }
+      sums[i] = sumUsd / hbarUsdPrice + fixedHbar;
+    }
+    const sorted = Array.from(sums).sort((a, b) => a - b);
+    const idx = Math.min(N - 1, Math.floor(quantile * N));
+    const jointVarHbar = sorted[idx];
+    const jointMaxHbar = sorted[N - 1];
+
+    if (jointVarHbar > snap.maxExposureHbar) {
+      return {
+        ok: false,
+        reason: `joint ${(quantile * 100).toFixed(1)}% VaR of ${jointVarHbar.toFixed(2)} HBAR (including this proposed policy) exceeds the ${(snap.maxExposureRatio * 100).toFixed(0)}% pool cap of ${snap.maxExposureHbar.toFixed(2)} HBAR`,
+        snapshot: snap,
+        jointVarHbar,
+        jointMaxHbar,
+        pathsUsed: N,
+        quantile,
+      };
+    }
+    return { ok: true, snapshot: snap, jointVarHbar, jointMaxHbar, pathsUsed: N, quantile };
+  }
+
   return {
     snapshot,
     checkIssuance,
+    checkIssuanceJointVaR,
     add,
     remove,
     dropExpired,
