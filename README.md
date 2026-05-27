@@ -41,40 +41,40 @@ European-style **cost-cap option**:
 - **Strike K**, **notional Q** (GPU-hours), **window** (e.g. 30 days), **premium P** up front.
 - **Payout at expiry:** `max(0, R_observed − K) × Q`, capped at `maxPayoutHbar`.
 
-## Pricing — Monte Carlo over jump-diffusion
+## Algorithm summary
 
-```
-premium = expected_payout + risk_load + ops_load
-expected_payout = E[ max(0, R − K) ] × Q     (Monte Carlo, 5000 paths)
-```
+Every layer of Aegis is mapped to the published industry standard for the closest
+analogous asset class (electricity, gas, and other volatile spot-priced commodities).
+The full methods writeup with literature references is in
+[`docs/ALGORITHMS.md`](docs/ALGORITHMS.md); the punch line:
 
-The price process is a **mean-reverting jump-diffusion** on `log R`:
+| Layer | What Aegis uses | Standard |
+|---|---|---|
+| Price process | **Regime-switching mean-reverting jump-diffusion** (stable / squeeze) | Janczura-Weron, Cartea-Figueroa, Bégin et al. 2025 |
+| MC variance reduction | **Antithetic-pair sampling with best-of-both estimator selection** — never worse than plain MC | Dean Francis Press 2025 meta-analysis |
+| Risk loading | **CVaR_95-based** (coherent risk measure) — stdev mode selectable | Hardy CAS, Solvency II |
+| Calibration | **Press-Ball-Torous EM** with monotonic log-likelihood guarantee | Press 1967, Ball-Torous 1983, ESAIM PS 2020 |
+| Settlement | **Asian-style trailing 7-day TWAP** — manipulation-resistant | CME / ICE commodity contracts, Deribit |
+| Pool exposure | **Joint-payout 99% VaR** under stressed squeeze regime | Solvency II Pillar 1 |
 
-```
-log R[t+1] = log R[t] + κ(θ − log R[t])Δt + σ√Δt · Z + J[t]
-```
+The pricer always exposes its decomposition (`expected_payout`, `risk_load`, `ops_load`,
+`CVaR_95`, `P(ITM)`, `variance_reduction_factor`, `used_estimator`) so each quote is
+auditable. Both the method-of-moments and EM calibrations on bundled H100 history are
+exposed via the kit tool `aegis_get_price_params` for runtime audit.
 
-where `J[t]` fires with probability `λΔt` and is `N(μ_J, σ_J²)`. Mean reversion captures
-"spikes don't persist"; jumps capture "shortages happen rarely but matter a lot."
+### Sample MC quotes (R₀ = $2.50/hr, hbarUsdPrice = $0.05/HBAR, 20K paths, seed 42)
 
-**Calibration:** parameters are estimated from a bundled snapshot of 36 monthly H100
-USD/hr medians, Jan 2023 → Dec 2025 (sources: Lambda, Together, Vast.ai, Runpod,
-CoreWeave). The bundled-data calibration is exposed via `aegis_get_price_params` for
-audit. The runtime uses a slightly stressed parameter set so the demo shows meaningful
-30-day OTM premiums (monthly medians damp short-term spikes — discussed in detail in
-[`src/bootstrap.js`](src/bootstrap.js) and [`LIMITATIONS.md`](LIMITATIONS.md)).
+| Case | Premium | E[payout] | Risk load | Ops load | CVaR_95 | P(ITM) |
+|---|---:|---:|---:|---:|---:|---:|
+| ATM K=$2.50 30d Q=100 (stable) | 416.7 HBAR | 206.8 | 199.5 | 10.3 | 1536.7 | 48.3% |
+| OTM K=$4 30d Q=100 (stable)   | 35.7 HBAR  | 9.2   | 26.1  | 0.5  | 183.0  | 0.3%  |
+| OTM K=$6 30d Q=100 (stable)   | 10.9 HBAR  | 2.8   | 8.0   | 0.1  | 56.2   | 0.1%  |
+| OTM K=$4 90d Q=100 (stable)   | 444.0 HBAR | 113.8 | 324.4 | 5.7  | 2276.8 | 2.8%  |
+| OTM K=$4 30d Q=100 (squeeze)  | 1378.9 HBAR| 471.1 | 884.2 | 23.6 | 6365.7 | 17.5% |
 
-**Sample MC quotes** (R₀ = $2.50/hr, hbarUsdPrice = $0.05/HBAR):
-
-| Strike | Notional | Window | Premium       | P(ITM) |
-|--------|---------:|-------:|---------------|-------:|
-| $2.50 (ATM) | 1000 GPU-h | 30d | 5793 HBAR | 57.5% |
-| $4.00 (OTM) | 1000 GPU-h | 30d |  289 HBAR |  2.3% |
-| $10  (deep OTM) | 1000 GPU-h | 30d |    0 HBAR |    0% |
-| $3   | 1000 GPU-h | 90d | 6847 HBAR | 40.0% |
-
-The realistic buyer regime is OTM with a 30-day window: cheap protection against tail
-spikes. ATM is closer to a "buy back your downside" — expensive.
+The 38× swing between stable and squeeze regimes for the same K = $4 cap is exactly the
+regime-aware signal — buying protection during a known shortage is appropriately
+expensive.
 
 ## Reference feed — locked hybrid approach
 
@@ -98,14 +98,14 @@ disclosure in [`LIMITATIONS.md`](LIMITATIONS.md).
         │  payout (RETURN_BYTES if > cap) → SETTLEMENT on HCS       │
         └───────────────┬──────────────────────────────────────────┘
                         │
-   ┌────────────────────▼─────────────────────────┐
-   │ AEGIS — Underwriter agent (Agent Kit)         │
-   │  • simulated price feed (calibrated + shock)  │
-   │  • Monte Carlo option pricer                  │
-   │  • pool + exposure book                       │
-   │  • policy issuance / settlement state machine │
-   │  • RETURN_BYTES human-in-loop for payouts     │
-   └───┬───────────────┬────────────────┬──────────┘
+   ┌────────────────────▼─────────────────────────────┐
+   │ AEGIS — Underwriter agent (Agent Kit)             │
+   │  • regime-switching jump-diffusion feed (labeled) │
+   │  • MC pricer: antithetic variates + CVaR loading  │
+   │  • pool + joint-VaR 99% exposure check            │
+   │  • Asian-style 7-day TWAP settlement              │
+   │  • RETURN_BYTES human-in-loop for payouts > cap   │
+   └───┬───────────────┬────────────────┬──────────────┘
        │ HBAR transfers │ reads          │ writes POLICY / PRICE_REF / SETTLEMENT
        ▼                ▼                ▼
  ┌───────────┐   ┌──────────────┐  ┌────────────────────────────┐
@@ -126,20 +126,31 @@ disclosure in [`LIMITATIONS.md`](LIMITATIONS.md).
   `aegis_settle_policy`, `aegis_post_provider_capacity`, `aegis_pool_status`,
   `aegis_list_policies`, `aegis_get_price_params`.
 - `aegis_issue_policy` is the integrity-critical path: re-verifies the buyer's
-  premium tx on the mirror node, runs the exposure book's `checkIssuance`, refuses
-  if the worst-case payout would push the pool over `maxExposureRatio × balance`.
+  premium tx on the mirror node, runs the **joint-VaR 99% exposure check** over
+  every active policy plus the proposed one (stress-regime R_T samples), refuses
+  if the joint quantile exceeds `maxExposureRatio × pool balance`.
 - `index.js` — `createAegisPlugin(...)` factory returning a kit-compatible `Plugin`.
 
 ### Pricing — `src/pricing/`
-- `rng.js`         seeded xorshift128+ PRNG with Box-Muller normals (deterministic)
-- `price-model.js` jump-diffusion `simulatePath` + `injectShock` + `DEFAULT_PARAMS`
-- `calibration.js` bundled H100 monthly medians + parameter estimator
-- `pricer.js`      `pricePremium` (full cost decomposition + 95% CI) + `maxLikelyPayoutHbar`
-- `feed.js`        `createSimFeed` — wall-clock-ticking labeled-simulated feed
+- `rng.js`            seeded xorshift128+ PRNG with Box-Muller normals (deterministic)
+- `price-model.js`    **regime-switching** jump-diffusion: `simulatePath`,
+                      `simulateAntitheticPair`, `regimeSequence`, `injectShock`,
+                      `DEFAULT_PARAMS` (single-regime) + `DEFAULT_REGIME_PARAMS`
+                      (two-regime stable / squeeze with Markov transitions)
+- `calibration.js`    bundled 36-month H100 medians + method-of-moments estimator
+- `em-calibration.js` Press-Ball-Torous **EM** with monotonic log-likelihood
+                      guarantee + soft posterior P(jump) per observation
+- `pricer.js`         `pricePremium` with antithetic-pair MC, CVaR-based risk
+                      loading, best-of-both estimator (varianceReductionFactor,
+                      usedEstimator), `maxLikelyPayoutHbar` (stress-regime
+                      99.5% quantile), `sampleStressedRT` for the exposure book
+- `feed.js`           `createSimFeed` — wall-clock-ticking labeled-simulated feed
+                      with `recentPath(N)` for Asian-style settlement
 
 ### Pool + exposure — `src/pool/`
-- `exposure.js` in-memory book: add / remove / dropExpired / list / snapshot /
-  checkIssuance with conservative Σ-maxPayout aggregation
+- `exposure.js` in-memory book: add / remove / dropExpired / list / snapshot,
+                `checkIssuance` (Σ-maxPayout legacy) AND `checkIssuanceJointVaR`
+                (Solvency-II-style 99% VaR over joint payout distribution)
 - `pool.js`     mirror-node-backed balance reader
 
 ### Agents — `src/agents/`
@@ -151,7 +162,9 @@ disclosure in [`LIMITATIONS.md`](LIMITATIONS.md).
 ### Hedera I/O — `src/hedera/`
 - `envelope.js`  v1 envelope schema (POLICY / PRICE_REF / SETTLEMENT /
                  PROVIDER_CAPACITY) with `superRefine` invariants
-                 (PAID_OUT ↔ payoutHbar>0+payoutTxId; EXPIRED ↔ both null)
+                 (PAID_OUT ↔ payoutHbar>0+payoutTxId; EXPIRED ↔ both null);
+                 SETTLEMENT carries `observationWindowDays` so the Asian-style
+                 7-day-TWAP averaging is explicit in the audit trail
 - `mirror.js`    REST client + `verifyTransaction` + `matchesExpectedTransfer`
                  (seller credit exact, buyer debit ≥ amount + fee) + `verifyWithRetry`
                  (handles 2–6s mirror lag)
@@ -188,11 +201,14 @@ cp .env.example .env
 ```bash
 npm run smoke:balance     # logs AgentMode enum + queries buyer's testnet HBAR balance
 npm run smoke:hcs         # creates the Aegis HCS topic; prints AEGIS_TOPIC_ID for .env
-npm run smoke:lifecycle 4 10 30 1.8
+npm run smoke:lifecycle 4 5 30 1.6 10
                           # full end-to-end on testnet:
-                          # quote(K=$4,Q=10,30d) → pay premium → POLICY →
-                          # inject shock ×1.8 → advance 30d → settle →
-                          # RETURN_BYTES → approve → PAID_OUT
+                          # quote(K=$4,Q=5,30d,maxPayout=$10) → pay premium →
+                          # POLICY (joint-VaR check passes) →
+                          # inject shock ×1.6 → advance 30d →
+                          # Asian-style 7-day TWAP settlement →
+                          # RETURN_BYTES (if payout > autonomous cap) →
+                          # approve → PAID_OUT or EXPIRED
 ```
 
 ### Run the demo

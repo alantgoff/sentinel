@@ -77,17 +77,30 @@ Aegis + kit tools.
 
 ### Try a prompt
 
-> "I want a 30-day cap on H100 rentals at $4/hr for 10 GPU-hours. Quote it
-> first, tell me the probability it pays out, and then issue the policy
-> if the premium is under 5 HBAR."
+> "I want a 30-day cap on H100 rentals at $4/hr for 10 GPU-hours. Quote
+> it first using cvar risk loading; tell me the expected payout, the
+> CVaR_95, the probability it pays out, and the variance-reduction factor
+> the pricer reports. If the premium is under 5 HBAR, issue the policy."
 
 Claude will typically:
 
 1. Call `aegis_quote_policy { strikeUsdHr: 4, qtyGpuHr: 10, windowDays: 30 }`.
-2. Inspect `premiumHbar` and `probInTheMoney`.
+   The pricer runs antithetic-pair Monte Carlo with CVaR risk loading by
+   default; the result includes `expectedPayoutHbar`, `riskLoadHbar`,
+   `cvarHbar`, `probInTheMoney`, `varianceReductionFactor`, and
+   `usedEstimator` so the agent has everything it needs to reason.
+2. Inspect the quote.
 3. If acceptable, call `transfer_hbar_tool` to pay the underwriter, then
-   `aegis_issue_policy` with the resulting tx id.
-4. Summarize: policyId, exposure, what would trigger payout.
+   `aegis_issue_policy` with the resulting tx id. Behind the scenes the
+   plugin runs the **joint-VaR exposure check** over the current active
+   policy basket plus this one; if the 99% quantile would breach the pool
+   cap the issuance refuses with the actual VaR number in the error.
+4. Summarize: policyId, exposure book state, what would trigger payout.
+
+For audit: `aegis_get_price_params` returns the active params plus BOTH
+the method-of-moments and EM calibrations on the bundled H100 history —
+including the per-month posterior jump probabilities — so the agent can
+explain the underwriter's pricing assumptions.
 
 You can verify everything happened by opening the Aegis UI (`npm start`,
 http://localhost:3000) and watching the new POLICY envelope appear in the
