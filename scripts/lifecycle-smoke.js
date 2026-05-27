@@ -17,7 +17,12 @@
  * HashScan or the mirror node REST API.
  *
  * Usage:
- *   node scripts/lifecycle-smoke.js [strike=4] [qty=100] [window=30] [shock=1.8]
+ *   node scripts/lifecycle-smoke.js [strike=4] [qty=100] [window=30] [shock=1.8] [maxPayoutUsd=10]
+ *
+ * maxPayoutUsd caps the per-policy payout obligation so the policy fits
+ * inside the underwriter's testnet pool (~1000 HBAR ≈ $50 at $0.05/HBAR);
+ * without it, the stress-regime exposure quantile would routinely exceed
+ * the pool cap and refuse to issue.
  */
 import { bootstrapAegis } from '../src/bootstrap.js';
 
@@ -29,9 +34,10 @@ function log(label, value) {
 
 async function main() {
   const strike = Number(process.argv[2] ?? '4');
-  const qty = Number(process.argv[3] ?? '100');
+  const qty = Number(process.argv[3] ?? '5');
   const window = Number(process.argv[4] ?? '30');
   const shock = Number(process.argv[5] ?? '1.8');
+  const maxPayoutUsd = Number(process.argv[6] ?? '10');     // 10 USD = 200 HBAR cap on payout
 
   const aegis = bootstrapAegis({
     feedTickMs: 60_000,                        // slow ticking — we'll advance manually
@@ -47,9 +53,9 @@ async function main() {
     autonomousPayoutCap: aegis.cfg.PAYOUT_AUTONOMOUS_CAP_HBAR + ' HBAR',
   });
 
-  log(`1. QUOTE  K=$${strike}/hr, Q=${qty} GPU-hr, window=${window}d`, '');
+  log(`1. QUOTE  K=$${strike}/hr, Q=${qty} GPU-hr, window=${window}d, maxPayout=$${maxPayoutUsd}`, '');
   const quote = await aegis.buyer.requestQuote({
-    strikeUsdHr: strike, qtyGpuHr: qty, windowDays: window, seed: Date.now(),
+    strikeUsdHr: strike, qtyGpuHr: qty, windowDays: window, maxPayoutUsd, seed: Date.now(),
   });
   log('quote', {
     premiumHbar: quote.premiumHbar,
@@ -73,6 +79,7 @@ async function main() {
     strikeUsdHr: strike,
     qtyGpuHr: qty,
     windowDays: window,
+    maxPayoutUsd,
     premiumHbar: quote.premiumHbar,
     premiumTxId,
     maxPayoutHbar: quote.maxPayoutHbar,
@@ -91,13 +98,18 @@ async function main() {
   log('5. FAST-FORWARD TO EXPIRY', '');
   aegis.priceFeed.advance(window);
   const RAtExpiry = aegis.priceFeed.getRT();
+  // Asian-style settlement: trailing-7-day mean rather than single-point.
+  const trailing = aegis.priceFeed.recentPath(7);
+  const RAvg = trailing.reduce((a, b) => a + b, 0) / trailing.length;
   log('R at expiry', RAtExpiry);
+  log('R Asian-mean (last 7d)', RAvg);
 
-  log('6. SETTLE', '');
+  log('6. SETTLE (Asian)', '');
   const settled = await aegis.underwriter.settle({
     policyId: issued.envelope.policyId,
     buyer: aegis.buyerAccountId,
-    observedUsdHr: RAtExpiry,
+    observedUsdHr: RAvg,
+    observationWindowDays: trailing.length,
     strikeUsdHr: strike,
     qtyGpuHr: qty,
     maxPayoutHbar: quote.maxPayoutHbar,
@@ -111,6 +123,7 @@ async function main() {
       policyId: settled.policyId,
       buyer: aegis.buyerAccountId,
       observedUsdHr: settled.observedUsdHr,
+      observationWindowDays: trailing.length,
       payoutHbar: settled.payoutHbar,
     });
     log('finalized', final);

@@ -81,9 +81,17 @@ test('SETTLEMENT PAID_OUT requires payout fields', () => {
   const ok = parseEnvelope({
     v: 1, type: 'SETTLEMENT', ts: LATER,
     policyId: 'pol-1', result: 'PAID_OUT',
-    observedUsdHr: 6.10, payoutHbar: 50, payoutTxId: TX2,
+    observedUsdHr: 6.10, observationWindowDays: 7,
+    payoutHbar: 50, payoutTxId: TX2,
   });
   assert.equal(ok.type, 'SETTLEMENT');
+  // observationWindowDays defaults to 1 when omitted (single-point settlement).
+  const dflt = parseEnvelope({
+    v: 1, type: 'SETTLEMENT', ts: LATER,
+    policyId: 'pol-1', result: 'PAID_OUT',
+    observedUsdHr: 6.10, payoutHbar: 50, payoutTxId: TX2,
+  });
+  if (dflt.type === 'SETTLEMENT') assert.equal(dflt.observationWindowDays, 1);
   // Missing payoutTxId → fail
   assert.equal(
     safeParseEnvelope({ v: 1, type: 'SETTLEMENT', ts: LATER, policyId: 'pol-1', result: 'PAID_OUT', observedUsdHr: 6.10, payoutHbar: 50, payoutTxId: null }).success,

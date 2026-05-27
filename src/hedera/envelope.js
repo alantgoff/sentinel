@@ -85,7 +85,15 @@ const Settlement = Base.extend({
   type: z.literal('SETTLEMENT'),
   policyId: z.string().min(1).max(128),
   result: SettlementResult,
+  /**
+   * Settlement reference price. For Asian-style settlement (the default),
+   * this is the arithmetic mean of R over the trailing `observationWindowDays`
+   * — manipulation-resistant, the same construction CME/ICE commodity
+   * contracts use. Single-point settlement (the original European form)
+   * is observationWindowDays = 1.
+   */
   observedUsdHr: z.number().positive().finite(),
+  observationWindowDays: z.number().int().positive().default(1),
   payoutHbar: z.number().nonnegative().finite(),
   payoutTxId: z.union([TxId, z.null()]),
 }).superRefine((s, ctx) => {

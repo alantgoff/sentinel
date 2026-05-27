@@ -113,14 +113,22 @@ export function createUnderwriter({
   }
 
   /**
-   * Settle a policy. Given the policyId, observed R, and the active policy's
-   * stored maxPayoutHbar/strike/qty, computes the payout in USD, converts to
-   * HBAR, transfers (AUTONOMOUS or RETURN_BYTES per cap), then posts SETTLEMENT.
+   * Settle a policy. Given the policyId and an OBSERVATION (either a single
+   * point or a trailing-N-day mean), and the active policy's stored
+   * maxPayoutHbar/strike/qty, computes the payout in USD, converts to HBAR,
+   * transfers (AUTONOMOUS or RETURN_BYTES per cap), then posts SETTLEMENT.
+   *
+   * Asian-style averaging (default in the caller; observationWindowDays > 1)
+   * dramatically reduces manipulation surface: a one-day spike from an
+   * adversarial provider posting can't move the settlement materially when
+   * settlement averages over 7 days. This is what CME / ICE / Deribit use
+   * for commodity-style settlement.
    *
    * @param {object} args
    * @param {string} args.policyId
    * @param {string} args.buyer
-   * @param {number} args.observedUsdHr
+   * @param {number} args.observedUsdHr             the reference price (single point OR trailing mean)
+   * @param {number} [args.observationWindowDays=1] number of trailing days averaged
    * @param {number} args.strikeUsdHr
    * @param {number} args.qtyGpuHr
    * @param {number} args.maxPayoutHbar
@@ -128,7 +136,8 @@ export function createUnderwriter({
    * @returns {Promise<SettleResultAutonomous | UnsignedPayout>}
    */
   async function settle({
-    policyId, buyer, observedUsdHr, strikeUsdHr, qtyGpuHr, maxPayoutHbar, hbarUsdPrice,
+    policyId, buyer, observedUsdHr, observationWindowDays = 1,
+    strikeUsdHr, qtyGpuHr, maxPayoutHbar, hbarUsdPrice,
   }) {
     // Freeze the observed R as a PRICE_REF tied to this policy — the audit
     // anchor for the settlement amount.
@@ -146,6 +155,7 @@ export function createUnderwriter({
         policyId,
         result: 'EXPIRED',
         observedUsdHr,
+        observationWindowDays,
         payoutHbar: 0,
         payoutTxId: null,
       });
@@ -187,6 +197,7 @@ export function createUnderwriter({
       policyId,
       result: 'PAID_OUT',
       observedUsdHr,
+      observationWindowDays,
       payoutHbar,
       payoutTxId,
     });
@@ -203,7 +214,7 @@ export function createUnderwriter({
    * @returns {Promise<SettleResultAutonomous>}
    */
   async function finalizeApprovedPayout({
-    policyId, buyer, observedUsdHr, payoutHbar,
+    policyId, buyer, observedUsdHr, observationWindowDays = 1, payoutHbar,
   }) {
     const transferOut = await autonomousTransferTool.execute(autonomousApi.client, autonomousApi.context, {
       transfers: [{ accountId: buyer, amount: payoutHbar }],
@@ -221,6 +232,7 @@ export function createUnderwriter({
       policyId,
       result: 'PAID_OUT',
       observedUsdHr,
+      observationWindowDays,
       payoutHbar,
       payoutTxId,
     });

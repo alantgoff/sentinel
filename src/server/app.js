@@ -117,23 +117,31 @@ app.post('/api/buy', async (req, res, next) => {
   }
 });
 
+// Asian-style settlement averages R over the trailing N days of the window.
+// Reduces manipulation surface vs single-point observation. Same construction
+// CME / ICE / Deribit use for commodity settlement.
+const ASIAN_SETTLEMENT_WINDOW_DAYS = 7;
+
 app.post('/api/settle', async (req, res, next) => {
   try {
     const { policyId } = req.body ?? {};
     if (!policyId) return res.status(400).json({ error: 'policyId required' });
     const active = aegis.exposure.get(policyId);
     if (!active) return res.status(404).json({ error: 'policy not active or already settled' });
-    // Look up the policy's K/Q from the active set + the original POLICY envelope
-    // (the active set only stores maxPayoutHbar + windowEndsTs; we need K/Q for
-    // payout math). Fetch from the topic.
     const items = await readEnvelopes(aegis.mirror, aegis.cfg.AEGIS_TOPIC_ID);
     const policyEnv = items.find(({ envelope }) => envelope?.type === 'POLICY' && envelope.policyId === policyId)?.envelope;
     if (!policyEnv || policyEnv.type !== 'POLICY') return res.status(404).json({ error: 'POLICY envelope not found on topic' });
 
+    // Compute the trailing-N-day arithmetic mean (Asian-style settlement).
+    const observations = aegis.priceFeed.recentPath(ASIAN_SETTLEMENT_WINDOW_DAYS);
+    const observedUsdHr = observations.reduce((a, b) => a + b, 0) / observations.length;
+    const observationWindowDays = observations.length;
+
     const result = await aegis.underwriter.settle({
       policyId,
       buyer: policyEnv.buyer,
-      observedUsdHr: aegis.priceFeed.getRT(),
+      observedUsdHr,
+      observationWindowDays,
       strikeUsdHr: policyEnv.strikeUsdHr,
       qtyGpuHr: policyEnv.qtyGpuHr,
       maxPayoutHbar: policyEnv.maxPayoutHbar,
@@ -144,9 +152,10 @@ app.post('/api/settle', async (req, res, next) => {
       pendingPayouts.set(policyId, {
         ...result,
         buyer: policyEnv.buyer,
+        observationWindowDays,
       });
     }
-    res.json(result);
+    res.json({ ...result, observationWindowDays });
   } catch (err) {
     next(err);
   }
@@ -162,6 +171,7 @@ app.post('/api/payout/approve', async (req, res, next) => {
       policyId: pending.policyId,
       buyer: pending.buyer,
       observedUsdHr: pending.observedUsdHr,
+      observationWindowDays: pending.observationWindowDays ?? 1,
       payoutHbar: pending.payoutHbar,
     });
     res.json(final);

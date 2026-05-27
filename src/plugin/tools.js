@@ -230,6 +230,7 @@ export function buildTools({
         policyId: z.string().min(1).max(128),
         result: z.enum(['EXPIRED', 'PAID_OUT']),
         observedUsdHr: z.number().positive().finite(),
+        observationWindowDays: z.number().int().positive().default(1),
         payoutHbar: z.number().nonnegative().finite(),
         payoutTxId: z.union([TxId, z.null()]),
       }),
@@ -242,6 +243,7 @@ export function buildTools({
           policyId: params.policyId,
           result: params.result,
           observedUsdHr: params.observedUsdHr,
+          observationWindowDays: params.observationWindowDays,
           payoutHbar: params.payoutHbar,
           payoutTxId: params.payoutTxId,
         };

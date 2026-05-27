@@ -189,8 +189,23 @@ function round8(x) { return Math.round(x * 1e8) / 1e8; }
 function round4(x) { return Math.round(x * 1e4) / 1e4; }
 
 /**
- * Max-likely payout estimator using the same antithetic-pair simulation
- * as the pricer. Used by the pool's exposure book for worst-case reservation.
+ * Max-likely payout estimator used by the pool's exposure book to reserve
+ * worst-case obligation per policy. Uses a STRESS distribution rather than
+ * the current-regime distribution: the pool needs to cover the policy even
+ * if a squeeze regime kicks in during the window, which is when most caps
+ * actually pay out.
+ *
+ * Stress construction:
+ *   - For regime-switching params: stress = initialSqueezeProb = 1 (start
+ *     in squeeze). This is conservative — it assumes the worst regime is
+ *     active throughout the window.
+ *   - For single-regime params: stress = params unchanged (no upgrade).
+ *
+ * Floor: if the 99.5% quantile is still zero (e.g., the strike is so deep
+ * OTM that no path reaches it), we use the empirical max from the stress
+ * simulation. The exposure book never reserves "zero" for a policy that
+ * was actually issued — that would let the buyer pay premium for a cap
+ * the pool isn't backing.
  *
  * @param {object} args
  * @param {number} args.K
@@ -199,27 +214,34 @@ function round4(x) { return Math.round(x * 1e4) / 1e4; }
  * @param {number} args.R0
  * @param {number} args.hbarUsdPrice
  * @param {number} [args.maxPayoutCapUsd]
- * @param {number} [args.quantile=0.99]
+ * @param {number} [args.quantile=0.995]
  * @param {number} [args.paths=5000]
  * @param {import('./price-model.js').PriceModelParams} [args.params=DEFAULT_PARAMS]
  * @param {number | bigint} [args.seed]
  */
 export function maxLikelyPayoutHbar({
   K, Q, windowDays, R0, hbarUsdPrice,
-  maxPayoutCapUsd, quantile = 0.99,
+  maxPayoutCapUsd, quantile = 0.995,
   paths = 5000, params = DEFAULT_PARAMS, seed,
 }) {
+  // Stress params: pin to squeeze regime if available.
+  const stressParams = params.regimes
+    ? { ...params, initialSqueezeProb: 1 }
+    : params;
   const rng = createRng(seed);
   const numPairs = Math.ceil(paths / 2);
   const effectivePaths = numPairs * 2;
   const cap = typeof maxPayoutCapUsd === 'number' ? maxPayoutCapUsd : Infinity;
   const payouts = new Float64Array(effectivePaths);
   for (let i = 0; i < numPairs; i++) {
-    const { a, b } = simulateAntitheticPair({ R0, days: windowDays, params, rng });
+    const { a, b } = simulateAntitheticPair({ R0, days: windowDays, params: stressParams, rng });
     payouts[2 * i] = Math.min(Math.max(0, a[windowDays] - K) * Q, cap);
     payouts[2 * i + 1] = Math.min(Math.max(0, b[windowDays] - K) * Q, cap);
   }
   const sorted = Array.from(payouts).sort((a, b) => a - b);
   const idx = Math.min(effectivePaths - 1, Math.floor(quantile * effectivePaths));
-  return sorted[idx] / hbarUsdPrice;
+  const quantileValue = sorted[idx];
+  // Floor at the empirical max — never reserve "zero" for an issued policy.
+  const stressMax = sorted[effectivePaths - 1];
+  return Math.max(quantileValue, stressMax) / hbarUsdPrice;
 }

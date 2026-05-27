@@ -99,6 +99,20 @@ export function createSimFeed(opts = {}) {
   }
 
   /**
+   * Return the last `nDays` observations of R (or all visible observations
+   * if nDays > current day). Used by Asian-style settlement to compute the
+   * trailing average price.
+   *
+   * @param {number} nDays
+   * @returns {number[]}
+   */
+  function recentPath(nDays) {
+    if (!Number.isInteger(nDays) || nDays < 1) throw new Error('nDays must be a positive integer');
+    const start = Math.max(0, day - nDays + 1);
+    return Array.from(path.slice(start, day + 1));
+  }
+
+  /**
    * Fast-forward the simulation by `days`. Used by the demo to advance to
    * expiry. Caps at horizonDays.
    *
@@ -112,5 +126,5 @@ export function createSimFeed(opts = {}) {
 
   if (opts.autoStart !== false) start();
 
-  return { start, stop, getRT, getSource, snapshot, injectShock, visiblePath, advance, path, get day() { return day; } };
+  return { start, stop, getRT, getSource, snapshot, injectShock, visiblePath, recentPath, advance, path, get day() { return day; } };
 }
