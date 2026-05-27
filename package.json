@@ -11,6 +11,7 @@
     "smoke:hcs": "node scripts/hcs-roundtrip.js",
     "smoke:lifecycle": "node scripts/lifecycle-smoke.js",
     "verify:tx": "node scripts/verify-tx.js",
+    "mcp": "node src/mcp-server.js",
     "test": "node --test --test-reporter=spec test/"
   },
   "keywords": [

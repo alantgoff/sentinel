@@ -17,4 +17,5 @@ jobs:
       - run: npm ci
       - run: node --check src/server/app.js
       - run: node --check src/bootstrap.js
+      - run: node --check src/mcp-server.js
       - run: npm test
