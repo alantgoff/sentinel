@@ -124,10 +124,12 @@ test('LIST_POLICIES initially empty; reflects exposure book after add', async ()
   assert.equal(list[0].policyId, 'pol-1');
 });
 
-test('GET_PARAMS returns the active params + calibration provenance', async () => {
+test('GET_PARAMS returns the active params + both calibration provenances', async () => {
   const { tools } = build({});
   const out = await findTool(tools, TOOL_NAMES.GET_PARAMS).execute(null, null, {});
-  assert.ok(out.calibratedFromBundledData.sampleSize > 0);
+  assert.ok(out.momCalibratedFromBundledData.sampleSize > 0);
+  assert.ok(out.emCalibratedFromBundledData.iterations > 0);
+  assert.ok(Array.isArray(out.emCalibratedFromBundledData.llTrace));
   assert.equal(out.feedSource, 'sim:labeled');
   assert.equal(out.currentRT, 2.5);
   assert.equal(out.hbarUsdPrice, 0.05);

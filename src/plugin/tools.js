@@ -4,6 +4,7 @@ import { submitEnvelope } from '../hedera/hcs.js';
 import { matchesExpectedTransfer, verifyWithRetry } from '../hedera/mirror.js';
 import { pricePremium, maxLikelyPayoutHbar } from '../pricing/pricer.js';
 import { calibrate, H100_MONTHLY } from '../pricing/calibration.js';
+import { emCalibrate } from '../pricing/em-calibration.js';
 import { poolBalanceHbar } from '../pool/pool.js';
 
 const AccountId = z.string().regex(/^\d+\.\d+\.\d+$/);
@@ -309,7 +310,15 @@ export function buildTools({
       parameters: z.object({}),
       execute: async () => ({
         active: priceParams,
-        calibratedFromBundledData: calibrate(H100_MONTHLY),
+        // Method-of-moments calibration on bundled H100 monthly medians.
+        // Threshold-based jump detection (>μ+2σ).
+        momCalibratedFromBundledData: calibrate(H100_MONTHLY),
+        // EM (Expectation-Maximization) calibration — Press-Ball-Torous
+        // jump-diffusion mixture likelihood. Soft posterior probabilities
+        // per observation, monotonic log-likelihood guarantee. The "right"
+        // way to calibrate jump-diffusion when the dataset is small enough
+        // that threshold detection is brittle.
+        emCalibratedFromBundledData: emCalibrate(H100_MONTHLY),
         feedSource: priceFeed.getSource(),
         currentRT: priceFeed.getRT(),
         hbarUsdPrice,
