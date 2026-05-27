@@ -3,7 +3,7 @@ import { buildClient } from './hedera/client.js';
 import { createMirrorClient } from './hedera/mirror.js';
 import { createExposureBook } from './pool/exposure.js';
 import { createSimFeed } from './pricing/feed.js';
-import { DEFAULT_PARAMS } from './pricing/price-model.js';
+import { DEFAULT_REGIME_PARAMS } from './pricing/price-model.js';
 import { createAegisPlugin } from './plugin/index.js';
 import { createUnderwriter } from './agents/underwriter.js';
 import { createBuyer } from './agents/buyer.js';
@@ -66,15 +66,14 @@ export function bootstrapAegis(opts = {}) {
   const mirror = createMirrorClient({ baseUrl: cfg.MIRROR_NODE_URL });
   const exposure = createExposureBook({ maxExposureRatio: cfg.MAX_EXPOSURE_RATIO });
 
-  // Runtime params. DEFAULT_PARAMS are hand-tuned to produce demoable behavior
-  // on short windows; calibrated params from monthly H100 medians are also
-  // computed and surfaced via aegis_get_price_params so a buyer can compare.
-  // Why not just use calibrated? Monthly medians damp short-term spikes —
-  // they under-state vol and jump intensity on 30-day windows. The hand-tuned
-  // defaults are still derived from observing the same data series; they are
-  // a "stressed" version that produces honest tail premiums. Both sets are
-  // labeled in the API response (calibration:bundled vs the active set).
-  const priceParams = DEFAULT_PARAMS;
+  // Runtime params: the regime-switching default (stable / squeeze) gives
+  // economically-honest pricing — much cheaper premiums during quiet periods,
+  // appropriately higher ones when we're in a known shortage regime. The
+  // bundled calibration is exposed via aegis_get_price_params so buyers can
+  // audit the assumptions.
+  // Note: starts in stable by default (initialSqueezeProb: 0); the UI's
+  // "inject shock" hook can also pin the state to squeeze for the demo.
+  const priceParams = DEFAULT_REGIME_PARAMS;
 
   const priceFeed = createSimFeed({
     R0: cfg.DEFAULT_R0_USD_HR,

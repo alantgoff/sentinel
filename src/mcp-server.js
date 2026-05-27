@@ -24,7 +24,7 @@ import { buildClient } from './hedera/client.js';
 import { createMirrorClient } from './hedera/mirror.js';
 import { createExposureBook } from './pool/exposure.js';
 import { createSimFeed } from './pricing/feed.js';
-import { DEFAULT_PARAMS } from './pricing/price-model.js';
+import { DEFAULT_REGIME_PARAMS } from './pricing/price-model.js';
 import { createAegisPlugin } from './plugin/index.js';
 
 async function main() {
@@ -44,7 +44,7 @@ async function main() {
     R0: cfg.DEFAULT_R0_USD_HR,
     horizonDays: 365,
     tickMs: 60_000,                // slow ticking — MCP clients call on-demand
-    params: DEFAULT_PARAMS,
+    params: DEFAULT_REGIME_PARAMS,
   });
 
   const plugin = createAegisPlugin({
@@ -54,7 +54,7 @@ async function main() {
     exposure,
     priceFeed,
     hbarUsdPrice: 0.05,
-    params: DEFAULT_PARAMS,
+    params: DEFAULT_REGIME_PARAMS,
     paths: 5000,
   });
 
